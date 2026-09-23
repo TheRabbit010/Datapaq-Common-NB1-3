@@ -196,19 +196,42 @@ def format_dwell_time(total_seconds):
     return f"{int(h):02d}:{int(m):02d}:{int(s):02d}"
 
 def clean_paq_text(raw_text):
-    """Strips binary C++ class identifiers and junk symbols."""
+    """Strips binary C++ class identifiers, file path noise, and truncates at network address."""
     if not raw_text:
         return ""
+    
+    # Truncate at network address / UNC paths (e.g. \\cho1-sv...)
+    text = re.split(r'\\\\', raw_text)[0]
+    
     tags_to_remove = [
         r'\bCAxisCustomUnits\b', r'\bCPaqfile\b', r'\bCByteDataArray\b',
         r'\bCProbeResult\b', r'\bCFurnaceRecipe\b', r'\bCZoom\b', 
-        r'\bCProbeMapEntry\b', r'\bcho1-sv\b', r'33333+', r'ffff+'
+        r'\bCProbeMapEntry\b', r'\bcho1-sv\b', r'\bCProcessFile\b',
+        r'\bCOven\b', r'\bCZone\b', r'33333+', r'ffff+'
     ]
-    text = raw_text
     for tag in tags_to_remove:
         text = re.sub(tag, '', text, flags=re.IGNORECASE)
+        
+    text = re.sub(r'#\d+', '', text)  # Strip binary ID tags like #24275
     text = re.sub(r'\s+', ' ', text).strip()
     return text
+
+def is_valid_probe_label(text):
+    """Filters out stream gibberish and binary floats decoded as ASCII."""
+    if not text or len(text) < 3:
+        return False
+    # Reject binary float / slash sequence artifacts
+    if re.search(r'[0-9/]{4,}', text): return False
+    if re.search(r'(.)\1{4,}', text): return False
+    if re.search(r'^[0-9\W]+$', text): return False
+    if re.search(r'[A-Za-z0-9]{12,}', text) and ' ' not in text: return False
+    
+    # Reject random consonant gibberish
+    words = [w for w in text.split() if len(w) > 4]
+    for w in words:
+        if not re.search(r'[aeiouAEIOU]', w):
+            return False
+    return True
 
 def parse_operator_and_metadata(raw_comments_list):
     """Extracts Operator Name, Company, Site, and Clean Notes."""
@@ -218,38 +241,31 @@ def parse_operator_and_metadata(raw_comments_list):
     company = "N/A"
     site = "N/A"
     
-    # 1. Operator Name: e.g. "CPaqfile Sunisa" -> "Sunisa" or "Operator: Sunisa"
     m_op = re.search(r'CPaqfile\s+([A-Za-z0-9_\-\.]+)', combined)
     if not m_op:
         m_op = re.search(r'(?:Operator|User)[:\s]+([A-Za-z0-9_\-\.]+)', combined, re.IGNORECASE)
     if m_op:
         operator_name = m_op.group(1).strip()
         
-    # 2. Company Name: e.g. "VSTS" or "Company: VSTS"
     m_comp = re.search(r'\b(VSTS|Datapaq)\b', combined, re.IGNORECASE)
     if not m_comp:
         m_comp = re.search(r'Company[:\s]+([A-Za-z0-9_\-\.]+)', combined, re.IGNORECASE)
     if m_comp:
         company = m_comp.group(1 if m_comp.lastindex >= 1 else 0).strip()
         
-    # 3. Site Name: e.g. "Power Chonburi" or "Chonburi"
     m_site = re.search(r'(Power\s+Chonburi|Chonburi|Plant\s+\d+|Factory\s+\d+)', combined, re.IGNORECASE)
     if not m_site:
         m_site = re.search(r'Site[:\s]+([A-Za-z0-9\s_\-\.]+)', combined, re.IGNORECASE)
     if m_site:
         site = m_site.group(0).strip()
         
-    # Clean full text for general comments box
     clean_text = clean_paq_text(combined)
     
-    # Strip out operator/company/site tokens from additional comments if already extracted
     for token in [operator_name, company, site]:
         if token != "N/A":
             clean_text = re.sub(rf'\b{re.escape(token)}\b', '', clean_text, flags=re.IGNORECASE)
             
-    clean_text = re.sub(r'#\d+', '', clean_text)  # Strip binary ID numbers like #24275
     clean_text = re.sub(r'\s+', ' ', clean_text).strip()
-    
     return operator_name, company, site, clean_text if clean_text else "N/A"
 
 @st.cache_data
@@ -306,16 +322,15 @@ def process_paq_file(file_bytes, filename):
     start_row = df_master[df_master["Time_Seconds"] == detected_start_sec].iloc[0]
     detected_start_hhmmss = start_row["Time_HHMMSS"]
 
-    # 3. Metadata, Comments & Embedded Image Extraction
-    found_comments, found_settings = [], []
+    # 3. Metadata, Comments, Image & Recipe Settings Extraction
+    found_comments, found_recipe_items = [], []
     embedded_img = None
 
     for stream_path in ole.listdir():
         s_name = "/".join(stream_path)
         try:
             raw_b = ole.openstream(stream_path).read()
-            if not raw_b: 
-                continue
+            if not raw_b: continue
 
             data_b = raw_b
             if raw_b.startswith(b'ZLIB') or b'x\x9c' in raw_b[:20]:
@@ -323,12 +338,10 @@ def process_paq_file(file_bytes, filename):
                     z_data = raw_b[8:] if raw_b.startswith(b'ZLIB') else raw_b
                     data_b = zlib.decompress(z_data)
                 except Exception:
-                    try: 
-                        data_b = zlib.decompress(z_data, -zlib.MAX_WBITS)
-                    except Exception: 
-                        data_b = raw_b
+                    try: data_b = zlib.decompress(z_data, -zlib.MAX_WBITS)
+                    except Exception: data_b = raw_b
 
-            # Extract Raster Image
+            # Extract Image
             if embedded_img is None and len(data_b) > 500:
                 for header, format_type in [(b'\x89PNG\r\n\x1a\n', 'PNG'), (b'\xff\xd8\xff', 'JPEG'), (b'BM', 'BMP')]:
                     idx = data_b.find(header)
@@ -336,43 +349,34 @@ def process_paq_file(file_bytes, filename):
                         try:
                             embedded_img = Image.open(io.BytesIO(data_b[idx:]))
                             break
-                        except Exception:
-                            pass
+                        except Exception: pass
 
             # Extract ASCII Strings
-            ascii_matches = re.findall(rb'[\x20-\x7E]{3,}', data_b)
-            clean_strings = []
+            ascii_matches = re.findall(rb'[\x20-\x7E]{4,}', data_b)
             for m in ascii_matches:
-                s = m.decode('ascii', errors='ignore').strip()
-                if len(s) >= 3 and not s.startswith("Paqfile") and not s.startswith("ProbeResults"):
-                    clean_strings.append(s)
+                s_raw = m.decode('ascii', errors='ignore').strip()
+                s_clean = clean_paq_text(s_raw)
 
-            full_text = " ".join(clean_strings)
-            if not full_text: 
-                continue
+                # Collect Comments
+                if any(k in s_name.lower() for k in ["comment", "notes", "header", "paqfile0"]):
+                    if len(s_clean) >= 3 and s_clean not in found_comments:
+                        found_comments.append(s_clean)
 
-            # Extract Comments / Operator Notes
-            if any(k in s_name.lower() for k in ["comment", "notes", "header", "paqfile0"]):
-                if len(full_text) >= 3:
-                    found_comments.append(full_text)
-
-            # Extract Recipe & Process Settings
-            if any(k in s_name.lower() for k in ["setting", "recipe", "process", "furnace"]):
-                clean_rec = clean_paq_text(full_text)
-                if len(clean_rec) >= 5:
-                    found_settings.append(clean_rec)
+                # Collect Recipe Parameters (O2 Exit, ppm, N2 Flow, Top Temp, Bot temp, etc.)
+                if any(kw in s_raw for kw in ["O2 Exit", "ppm", "CV speed", "mm/min", "N2 Flow", "WJ Flow", "Top Temp", "Bot temp", "SP2", "SP1"]):
+                    if not any(bad in s_raw for bad in ["CProcessFile", "COven", "CZone", "Paqfile"]):
+                        if s_clean not in found_recipe_items:
+                            found_recipe_items.append(s_clean)
 
         except Exception:
             continue
 
-    # Parse Operator Metadata
     operator_name, company, site, clean_comments_text = parse_operator_and_metadata(found_comments)
-    process_settings = "\n".join(dict.fromkeys(found_settings[:5])) if found_settings else "Standard Recipe Parameters"
+    process_settings = "\n".join(found_recipe_items) if found_recipe_items else "Standard Recipe Parameters"
 
     # 4. Thermocouple Probe Locations Extraction
     probe_locations = {}
 
-    # Method A: Scan for explicit #1..#8 or PB#1..PB#8 channel prefixes across all streams
     for stream_path in ole.listdir():
         try:
             raw_b = ole.openstream(stream_path).read()
@@ -388,14 +392,14 @@ def process_paq_file(file_bytes, filename):
                 s_raw = m.decode('ascii', errors='ignore').strip()
                 s_clean = clean_paq_text(s_raw)
 
-                # Pattern matching: "#1 (°C) Bottom cooler..." or "PB#1..." or "1: ..."
+                # Match patterns like "#1 (°C) Bottom cooler..."
                 m_num = re.search(r'#?([1-8])\s*[\(°C\)]*\s*([A-Za-z0-9\s/_\-\.&,\(\)]+)', s_clean)
                 if m_num:
                     ch_idx = int(m_num.group(1))
                     ch_key = f"PB#{ch_idx}"
                     loc_desc = m_num.group(2).strip()
 
-                    if len(loc_desc) >= 3 and ch_key in probe_cols:
+                    if is_valid_probe_label(loc_desc) and ch_key in probe_cols:
                         formatted_label = f"#{ch_idx} (°C) {loc_desc}" if not loc_desc.startswith("#") else loc_desc
                         if ch_key not in probe_locations or len(formatted_label) > len(probe_locations[ch_key]):
                             probe_locations[ch_key] = formatted_label
@@ -403,33 +407,7 @@ def process_paq_file(file_bytes, filename):
         except Exception:
             continue
 
-    # Method B: Scan ProbeMap stream for sequential probe descriptions
-    if len(probe_locations) < len(probe_cols):
-        for stream_path in ole.listdir():
-            s_name = "/".join(stream_path)
-            if "probemap" in s_name.lower() or "probelocation" in s_name.lower():
-                try:
-                    raw_b = ole.openstream(stream_path).read()
-                    data_b = raw_b[8:] if raw_b.startswith(b'ZLIB') else raw_b
-                    try: decomp = zlib.decompress(data_b)
-                    except Exception: decomp = raw_b
-
-                    ascii_strings = re.findall(rb'[\x20-\x7E]{4,}', decomp)
-                    valid_descs = []
-                    for m in ascii_strings:
-                        s_clean = clean_paq_text(m.decode('ascii', errors='ignore'))
-                        if len(s_clean) >= 4 and not s_clean.startswith("Paqfile") and not s_clean.startswith("ProbeResult"):
-                            valid_descs.append(s_clean)
-
-                    if len(valid_descs) >= len(probe_cols):
-                        for idx, desc in enumerate(valid_descs[:len(probe_cols)]):
-                            ch_key = f"PB#{idx+1}"
-                            if ch_key not in probe_locations or "Unlabeled" in probe_locations[ch_key]:
-                                probe_locations[ch_key] = f"#{idx+1} (°C) {desc}"
-                except Exception:
-                    pass
-
-    # Ensure all PB#1..PB#8 channels are populated
+    # Fill fallback probe locations if missing
     for col in probe_cols:
         if col not in probe_locations or not probe_locations[col]:
             probe_locations[col] = f"Channel {col.replace('PB#', '')} (Unlabeled)"
@@ -437,10 +415,9 @@ def process_paq_file(file_bytes, filename):
     # 5. STRICT PRIORITY AUTOMATIC FURNACE SELECTION LOGIC
     recipe_corpus = f"{process_settings} {clean_comments_text} {filename}"
 
-    furnace_id = "NB3"  # Default fallback
+    furnace_id = "NB3"
     furnace_variant = "NB3"
 
-    # PRIORITY 1: Check explicit NB3 Model Keywords FIRST (BTM, KE8, M2, EVO)
     if re.search(r'\b(KE8|M2|EVO|BTM)\b', recipe_corpus, re.IGNORECASE):
         furnace_id = "NB3"
         if re.search(r'\bBTM\b', recipe_corpus, re.IGNORECASE):
@@ -448,12 +425,10 @@ def process_paq_file(file_bytes, filename):
         else:
             furnace_variant = "NB3 (KE8/M2/EVO)"
 
-    # PRIORITY 2: Check explicit NB2 Model Keywords (Tahc, Utahc)
     elif re.search(r'\b(Tahc|Utahc)\b', recipe_corpus, re.IGNORECASE):
         furnace_id = "NB2"
         furnace_variant = "NB2 (Tahc/Utahc)"
 
-    # PRIORITY 3: Check explicit NB1 Model Keywords (RAD, CDS, KN9, 12SHP)
     elif re.search(r'\b(RAD|CDS|KN9|12SHP)\b', recipe_corpus, re.IGNORECASE):
         furnace_id = "NB1"
         if re.search(r'\bRAD\b', recipe_corpus, re.IGNORECASE):
@@ -461,13 +436,11 @@ def process_paq_file(file_bytes, filename):
         else:
             furnace_variant = "NB1 (CDS/KN9/12SHP)"
 
-    # PRIORITY 4: Check generic NB1 Week/Date patterns (WKxx, YYMMDD)
     elif (re.search(r'\bWK\d{1,2}\b', recipe_corpus, re.IGNORECASE) or 
           re.search(r'\b\d{6}\b', recipe_corpus)):
         furnace_id = "NB1"
         furnace_variant = "NB1 (Standard)"
 
-    # PRIORITY 5: Fallback regex check for NB1/NB2/NB3 explicit tags
     else:
         f_match = re.search(r'NB\s*Furnace\s*0?([123])\b|NB\s*#?\s*0?([123])\b|NB-0?([123])\b', recipe_corpus, re.IGNORECASE)
         if f_match:
@@ -475,7 +448,6 @@ def process_paq_file(file_bytes, filename):
             furnace_id = f"NB{num}"
             furnace_variant = furnace_id
 
-    # Retrieve base configuration and apply sub-type threshold overrides
     base_cfg = FURNACE_CONFIGS.get(furnace_id, FURNACE_CONFIGS["NB3"])
     cfg = dict(base_cfg)
 
@@ -531,7 +503,6 @@ def process_paq_file(file_bytes, filename):
 
     line_speed_mpm = cfg["line_speed_mpm"]
 
-    # Conveyor Speed Override from Recipe text
     cv_sp_matches = re.findall(r'CV\s*SP\s*[:=]?\s*(\d{3,4})\s*(?:mm/\s*min|mm)?', recipe_corpus, re.IGNORECASE)
     if cv_sp_matches:
         last_speed = float(cv_sp_matches[-1])
@@ -706,8 +677,8 @@ else:
             m2.text_input("🏢 Company", data1["company"], disabled=True)
             m3.text_input("📍 Site", data1["site"], disabled=True)
 
-            st.text_area("💬 Additional Comments / Notes", data1["operator_comment"], height=100)
-            st.text_area("⚙️ Recipe / Process Settings", data1["process_settings"], height=180)
+            st.text_area("💬 Additional Comments / Notes", data1["operator_comment"], height=160)
+            st.text_area("⚙️ Recipe / Process Settings", data1["process_settings"], height=220)
 
         with col_b:
             st.subheader("📍 Thermocouple Channel Locations")
