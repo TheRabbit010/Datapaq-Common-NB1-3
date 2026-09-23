@@ -9,6 +9,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 from PIL import Image
+from datetime import datetime
 
 # ==============================================================================
 # STREAMLIT PAGE CONFIGURATION & CSS STYLING
@@ -72,7 +73,7 @@ PROBE_COLORS = {
     "PB#8": "#00ffff"  # Cyan
 }
 
-# Group Color Definitions for Plotly Graphs (Adjusted for Dark Mode)
+# Group Color Definitions for Plotly Graphs
 GROUP_COLORS = {
     "Dryer": "rgba(255, 235, 156, 0.15)",
     "Debinder": "rgba(255, 199, 119, 0.15)",
@@ -310,7 +311,11 @@ def process_paq_file(file_bytes, filename):
     aligned_probes = {k: (v + [np.nan] * (max_samples - len(v)) if len(v) < max_samples else v) for k, v in all_probes.items()}
     df_master = pd.DataFrame(aligned_probes)
     df_master.insert(0, "Time_Seconds", range(len(df_master)))
-    df_master.insert(1, "Time_HHMMSS", pd.to_datetime(df_master["Time_Seconds"], unit='s').dt.strftime('%H:%M:%S'))
+    
+    # Create valid dummy dates to use Plotly's native time-formatting
+    base_date = pd.Timestamp("1970-01-01 00:00:00")
+    df_master.insert(1, "Time_Stamp", base_date + pd.to_timedelta(df_master["Time_Seconds"], unit="s"))
+    df_master.insert(2, "Time_HHMMSS", df_master["Time_Stamp"].dt.strftime('%H:%M:%S'))
 
     probe_cols = [col for col in df_master.columns if col.startswith("PB#")]
 
@@ -517,7 +522,6 @@ else:
     furnace_duration_secs = int(furnace_duration_mins * 60)
 
     st.success(f"✓ File Loaded Successfully: **{data1['filename']}**")
-    
     m_col1, m_col2, m_col3 = st.columns(3)
     m_col1.metric("Confirmed Furnace", f_variant)
     m_col2.metric("Conveyor Speed", f"{data1['line_speed_mpm']:.3f} m/min")
@@ -526,23 +530,71 @@ else:
     tabs = st.tabs(["📊 Profile Graphs", "📝 Metadata & Probe Map", "🏭 Zone & Stage Summary", "📈 Statistics & Boxplots", "💾 Master Dataset & Export", "⚖️ Compare Files"])
 
     with tabs[0]:
-        st.subheader("Global Furnace Profile (Distance Aligned)")
+        st.subheader("Global Furnace Profile")
+        
+        # Dual-Axis Global Profile Chart (Time & Distance)
         fig1 = go.Figure()
+        
+        # We plot on the Time Axis (X1) but configure it to format as HH:MM:SS
         custom_hover1 = np.stack((df_m1["Time_HHMMSS"], df_m1["Time_Seconds"], df_m1["Distance_Meters"]), axis=-1)
         for col in probe_cols:
-            fig1.add_trace(go.Scatter(x=df_m1["Distance_Meters"], y=df_m1[col], mode="lines", name=col, customdata=custom_hover1, hovertemplate="%{fullData.name}: %{y:.1f} °C<br>Time: %{customdata[0]} (%{customdata[1]}s)<br>Dist: %{x:.2f} m", line=dict(color=PROBE_COLORS.get(col))))
+            fig1.add_trace(go.Scatter(
+                x=df_m1["Time_Stamp"], 
+                y=df_m1[col], 
+                mode="lines", 
+                name=col, 
+                customdata=custom_hover1, 
+                hovertemplate="%{fullData.name}: %{y:.1f} °C<br>Time: %{customdata[0]}<br>Dist: %{customdata[2]:.2f} m", 
+                line=dict(color=PROBE_COLORS.get(col)),
+                xaxis="x"
+            ))
+            
         for z in zones:
             z_color = GROUP_COLORS.get(z["group"], "rgba(200, 200, 200, 0.2)")
-            fig1.add_vrect(x0=z["start"], x1=z["start"] + z["length"], fillcolor=z_color, layer="below", line_width=0.5, line_dash="dot", line_color="rgba(120, 120, 120, 0.4)", annotation_text=f"{z['num']}.{z['name']}", annotation_position="top left", annotation=dict(font_size=9, font_color="#222222", textangle=-90))
+            # Map Distance to Time for background rects
+            z_start_sec = (z["start"] / data1['line_speed_mpm']) * 60
+            z_end_sec = ((z["start"] + z["length"]) / data1['line_speed_mpm']) * 60
+            
+            # Using datetime values for X-axis
+            z_start_time = pd.Timestamp("1970-01-01 00:00:00") + pd.to_timedelta(z_start_sec, unit="s")
+            z_end_time = pd.Timestamp("1970-01-01 00:00:00") + pd.to_timedelta(z_end_sec, unit="s")
+            
+            fig1.add_vrect(x0=z_start_time, x1=z_end_time, fillcolor=z_color, layer="below", line_width=0.5, line_dash="dot", line_color="rgba(120, 120, 120, 0.4)", annotation_text=f"{z['num']}.{z['name']}", annotation_position="top left", annotation=dict(font_size=9, font_color="#a0aab2", textangle=-90))
+        
         fig1.add_hline(y=cfg["trigger_temp_brazing"], line_dash="dash", line_color="red", annotation_text=f"Brazing ({cfg['trigger_temp_brazing']}°C)", annotation_position="bottom right")
-        fig1.update_layout(title=f"GLOBAL FURNACE PROFILE ({f_variant}): {data1['filename']}", xaxis=dict(title="Furnace Distance (Meters from Entrance)", range=[-1, total_furnace_length + 2]), yaxis_title="Temperature (°C)", hovermode="x unified", template="plotly_dark", height=550)
+        
+        # Compute exact final timestamp for boundaries
+        end_time_stamp = pd.Timestamp("1970-01-01 00:00:00") + pd.to_timedelta(furnace_duration_secs + 120, unit="s")
+
+        fig1.update_layout(
+            title=f"GLOBAL FURNACE PROFILE ({f_variant}): {data1['filename']}",
+            yaxis_title="Temperature (°C)",
+            hovermode="x unified",
+            template="plotly_dark",
+            height=550,
+            xaxis=dict(
+                title="Time (hh:mm:ss)",
+                tickformat="%H:%M:%S",
+                range=[pd.Timestamp("1970-01-01 00:00:00"), end_time_stamp]
+            ),
+            xaxis2=dict(
+                title="Distance (Meters)",
+                overlaying="x",
+                side="bottom",
+                position=0.0,
+                range=[0, total_furnace_length + (120 * data1['line_speed_mpm'] / 60)], # Matches Time scale padding
+                anchor="free"
+            )
+        )
+        
+        # Add invisible trace to bind the Distance (X2) axis so it scales properly
+        fig1.add_trace(go.Scatter(x=df_m1["Distance_Meters"], y=df_m1[probe_cols[0]] * 0, showlegend=False, opacity=0, xaxis="x2", hoverinfo='skip'))
+        
         st.plotly_chart(fig1, use_container_width=True)
 
         st.markdown("---")
         
-        # ADDED TOGGLE BUTTON TO SHOW/HIDE THE SECOND GRAPH
         show_indiv_chart = st.toggle("👁️ Show / Hide Individually Aligned Probe Chart", value=True)
-        
         if show_indiv_chart:
             st.subheader("Individually Aligned Probe Chart (Own 60°C Entry)")
             fig2 = go.Figure()
@@ -552,7 +604,8 @@ else:
                 fig2.add_trace(go.Scatter(x=df_m1[f"Distance_{col}"], y=df_m1[col], mode="lines", name=f"{col} (+{offset_m:.2f}m)" if offset_m > 0 else f"{col} (Lead)", customdata=indiv_hover, hovertemplate="%{fullData.name}: %{y:.1f} °C<br>Indiv Dist: %{x:.2f} m<br>Time: %{customdata[0]}", line=dict(color=PROBE_COLORS.get(col))))
             for z in zones:
                 z_color = GROUP_COLORS.get(z["group"], "rgba(200, 200, 200, 0.2)")
-                fig2.add_vrect(x0=z["start"], x1=z["start"] + z["length"], fillcolor=z_color, layer="below", line_width=0.5, line_dash="dot", line_color="rgba(120, 120, 120, 0.4)", annotation_text=f"{z['num']}.{z['name']}", annotation_position="top left", annotation=dict(font_size=9, font_color="#222222", textangle=-90))
+                fig2.add_vrect(x0=z["start"], x1=z["start"] + z["length"], fillcolor=z_color, layer="below", line_width=0.5, line_dash="dot", line_color="rgba(120, 120, 120, 0.4)", annotation_text=f"{z['num']}.{z['name']}", annotation_position="top left", annotation=dict(font_size=9, font_color="#a0aab2", textangle=-90))
+            
             fig2.update_layout(title=f"INDIVIDUALLY ALIGNED PROFILES ({f_variant}): {data1['filename']}", xaxis=dict(title="Individual Probe Distance (Meters from Probe's 60°C Entry)", range=[-1, total_furnace_length + 2]), yaxis_title="Temperature (°C)", hovermode="x unified", template="plotly_dark", height=550)
             st.plotly_chart(fig2, use_container_width=True)
 
