@@ -584,29 +584,7 @@ else:
         st.plotly_chart(fig1, use_container_width=True)
         st.markdown("---")
         
-        col_a, col_b = st.columns(2)
-        with col_a:
-            st.subheader("👤 Operator Info")
-            m1, m2, m3 = st.columns(3)
-            m1.text_input("Name", data1["operator_name"], disabled=True)
-            m2.text_input("Company", data1["company"], disabled=True)
-            m3.text_input("Site", data1["site"], disabled=True)
-            st.text_area("💬 Comments", data1["operator_comment"], height=120)
-            st.text_area("⚙️ Recipe", data1["process_settings"], height=200)
-
-        with col_b:
-            st.subheader("📍 Probe Locations")
-            if data1["probe_locations"]:
-                sorted_probes = sorted(data1["probe_locations"].items(), key=lambda x: int(x[0].replace("PB#", "")) if x[0].replace("PB#", "").isdigit() else 0)
-                st.dataframe(pd.DataFrame([{"Channel": k, "Attached Location": v} for k, v in sorted_probes]), use_container_width=True, hide_index=True)
-            else:
-                st.info("No explicit probe location mapping found in PAQ header.")
-            if data1["embedded_img"]:
-                st.subheader("🖼️ PAQ Image")
-                st.image(data1["embedded_img"], use_container_width=True)
-
-        st.markdown("---")
-        
+        # Build Inspection Matrix before displaying it
         stages = cfg["stages"]
         has_debinder = any(s["Stage"] == "Debinder" for s in stages)
         dryer_info = next((s for s in stages if s["Stage"] == "Dryer"), stages[0])
@@ -633,6 +611,29 @@ else:
             
         st.subheader(f"⏱️ Inspection Matrix — {f_variant}")
         st.dataframe(pd.DataFrame(matrix_rows), use_container_width=True, hide_index=True)
+        st.markdown("---")
+        
+        col_a, col_b = st.columns(2)
+        with col_a:
+            st.subheader("👤 Operator Info")
+            m1, m2, m3 = st.columns(3)
+            m1.text_input("Name", data1["operator_name"], disabled=True)
+            m2.text_input("Company", data1["company"], disabled=True)
+            m3.text_input("Site", data1["site"], disabled=True)
+            st.text_area("💬 Comments", data1["operator_comment"], height=120)
+            st.text_area("⚙️ Recipe", data1["process_settings"], height=200)
+
+        with col_b:
+            st.subheader("📍 Probe Locations")
+            if data1["probe_locations"]:
+                sorted_probes = sorted(data1["probe_locations"].items(), key=lambda x: int(x[0].replace("PB#", "")) if x[0].replace("PB#", "").isdigit() else 0)
+                st.dataframe(pd.DataFrame([{"Channel": k, "Attached Location": v} for k, v in sorted_probes]), use_container_width=True, hide_index=True)
+            else:
+                st.info("No explicit probe location mapping found in PAQ header.")
+            if data1["embedded_img"]:
+                st.subheader("🖼️ PAQ Image")
+                st.image(data1["embedded_img"], use_container_width=True)
+
         st.markdown("---")
         
         show_indiv_chart = st.toggle("👁️ Show / Hide Individually Aligned Chart", value=False)
