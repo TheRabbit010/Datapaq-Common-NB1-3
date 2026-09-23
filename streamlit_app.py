@@ -522,17 +522,25 @@ else:
             row_dict = {"Group": z["group"], "Zone #": z["num"], "Zone Name": z["name"], "Start (m)": z_start, "End (m)": z_end}
             if not z_df.empty and probe_cols:
                 max_s = z_df[probe_cols].max()
-                for col in probe_cols: row_dict[col] = max_s[col]
+                for col in probe_cols: 
+                    row_dict[col] = max_s[col]
                 row_dict["Zone Peak (°C)"] = max_s.max()
                 row_dict["Hot Probe"] = max_s.idxmax()
             else:
-                for col in probe_cols: row_dict[col] = np.nan
+                for col in probe_cols: 
+                    row_dict[col] = np.nan
                 row_dict["Zone Peak (°C)"] = np.nan
                 row_dict["Hot Probe"] = "-"
             zone_max_records.append(row_dict)
 
         df_zone_summary = pd.DataFrame(zone_max_records)
-        st.dataframe(df_zone_summary.style.background_gradient(cmap="OrRd", subset=probe_cols + ["Zone Peak (°C)"]), use_container_width=True)
+        
+        # Safe Render with Gradient Fallback
+        try:
+            styled_zone_df = df_zone_summary.style.background_gradient(cmap="OrRd", subset=probe_cols + ["Zone Peak (°C)"])
+            st.dataframe(styled_zone_df, use_container_width=True)
+        except Exception:
+            st.dataframe(df_zone_summary, use_container_width=True)
 
         st.markdown("---")
         st.subheader("⏱️ Inspection Matrix (Stage Max Temps & Dwell Times)")
