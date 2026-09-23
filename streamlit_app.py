@@ -32,6 +32,18 @@ div[data-testid="stMetricLabel"] {
     font-weight: 500 !important;
     color: #a0aab2 !important;
 }
+/* Style for Reset Button */
+div.stButton > button:first-child {
+    background-color: #ff4b4b;
+    color: white;
+    font-weight: bold;
+    border-radius: 5px;
+    width: 100%;
+}
+div.stButton > button:first-child:hover {
+    background-color: #ff3333;
+    border-color: #ff3333;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -90,13 +102,6 @@ FURNACE_CONFIGS = {
             {"Stage": "Brazing", "Start (m)": 21.81, "End (m)": 42.97, "thresh": 577.0},
         ],
         "trigger_temp_brazing": 577.0,
-        "dryer_dwell_thresh_1": 150.0,
-        "dryer_dwell_thresh_2": 200.0,
-        "debinder_dwell_thresh": 300.0,
-        "brazing_dwell_thresh_1": 550.0,
-        "brazing_dwell_thresh_2": 577.0,
-        "brazing_dwell_thresh_3": 591.0,
-        "brazing_dwell_thresh_4": 600.0,
     },
     "NB2": {
         "line_speed_mpm": 1.560,
@@ -124,13 +129,6 @@ FURNACE_CONFIGS = {
             {"Stage": "Brazing", "Start (m)": 8.73, "End (m)": 30.33, "thresh": 577.0},
         ],
         "trigger_temp_brazing": 577.0,
-        "dryer_dwell_thresh_1": 200.0,
-        "dryer_dwell_thresh_2": 250.0,
-        "debinder_dwell_thresh": None,
-        "brazing_dwell_thresh_1": 550.0,
-        "brazing_dwell_thresh_2": 577.0,
-        "brazing_dwell_thresh_3": 591.0,
-        "brazing_dwell_thresh_4": 600.0,
     },
     "NB3": {
         "line_speed_mpm": 1.270,
@@ -160,13 +158,6 @@ FURNACE_CONFIGS = {
             {"Stage": "Brazing", "Start (m)": 9.14, "End (m)": 29.98, "thresh": 577.0},
         ],
         "trigger_temp_brazing": 577.0,
-        "dryer_dwell_thresh_1": 150.0,
-        "dryer_dwell_thresh_2": 200.0,
-        "debinder_dwell_thresh": None,
-        "brazing_dwell_thresh_1": 550.0,
-        "brazing_dwell_thresh_2": 577.0,
-        "brazing_dwell_thresh_3": 591.0,
-        "brazing_dwell_thresh_4": 600.0,
     }
 }
 
@@ -488,6 +479,29 @@ st.markdown("Automated thermal profile extraction, zone metrics, and multi-file 
 
 with st.sidebar:
     st.header("📁 File Upload")
+    
+    # Custom CSS for Reset button
+    st.markdown("""
+    <style>
+    div.stButton > button:first-child {
+        background-color: #ff4b4b;
+        color: white;
+        font-weight: bold;
+        border-radius: 5px;
+        width: 100%;
+        margin-bottom: 20px;
+    }
+    div.stButton > button:first-child:hover {
+        background-color: #ff3333;
+        border-color: #ff3333;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+    
+    if st.button("🔄 Reset / Clear Data"):
+        st.cache_data.clear()
+        st.experimental_rerun()
+        
     uploaded_file1 = st.file_uploader("Upload Main .PAQ File", type=["paq"], key="paq1")
     st.markdown("---")
     st.header("⚖️ Comparison Option")
@@ -508,7 +522,6 @@ else:
     furnace_duration_secs = int(furnace_duration_mins * 60)
 
     st.success(f"✓ File Loaded Successfully: **{data1['filename']}**")
-    
     m_col1, m_col2, m_col3 = st.columns(3)
     m_col1.metric("Confirmed Furnace", f_variant)
     m_col2.metric("Conveyor Speed", f"{data1['line_speed_mpm']:.3f} m/min")
