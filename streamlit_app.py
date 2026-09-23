@@ -161,13 +161,11 @@ def extract_probe_series_autonomously(decomp_bytes):
     for offset in range(0, min(12000, len(decomp_bytes) - 800), 1):
         rem = len(decomp_bytes) - offset
         cnt = rem // 8
-        if cnt < 500:
-            continue
+        if cnt < 500: continue
         try:
             vals = struct.unpack(f"<{cnt}d", decomp_bytes[offset : offset + cnt * 8])
         except Exception:
             continue
-
         clean_vals, glitch_count = [], 0
         for v in vals:
             if isinstance(v, float) and -10.0 <= v <= 650.0:
@@ -178,14 +176,10 @@ def extract_probe_series_autonomously(decomp_bytes):
                 if len(clean_vals) > 500:
                     if glitch_count <= 5:
                         clean_vals.append(clean_vals[-1] if clean_vals else 0.0)
-                    else:
-                        break
-                elif glitch_count > 3:
-                    clean_vals = []
-
+                    else: break
+                elif glitch_count > 3: clean_vals = []
         if len(clean_vals) > len(best_series) and max(clean_vals) > 150.0:
             best_series = clean_vals
-
     return best_series
 
 def format_dwell_time(total_seconds):
@@ -195,118 +189,34 @@ def format_dwell_time(total_seconds):
     h, m = divmod(m, 60)
     return f"{int(h):02d}:{int(m):02d}:{int(s):02d}"
 
-def clean_paq_text(raw_text):
-    """Strips binary C++ class identifiers, network addresses, and binary noise."""
-    if not raw_text:
-        return ""
+def parse_operator_and_metadata(comments_list):
+    """Extract Operator, Company, Site and Clean the Notes"""
+    combined = "\n".join(comments_list)
+    op, comp, site = "N/A", "N/A", "N/A"
     
-    # Truncate at UNC network paths e.g. \\cho1-sv...
-    text = re.split(r'\\\\', raw_text)[0]
+    # Extract Site
+    m_site = re.search(r'(Power\s+Chonburi|Chonburi|Plant\s+\d+|Factory\s+\d+)', combined, re.IGNORECASE)
+    if m_site: site = m_site.group(1).strip()
     
-    # Truncate at CProbe or CPaqfile or binary symbol junk
-    text = re.split(r'\bCProbe\b|\bCAxisCustomUnits\b|\bCPaqfile\b|\bCByteDataArray\b', text)[0]
+    # Extract Company
+    m_comp = re.search(r'\b(VSTS|Datapaq)\b', combined, re.IGNORECASE)
+    if m_comp: comp = m_comp.group(1).strip()
     
-    # Truncate at binary symbol repetition sequences
-    text = re.split(r'[@^\$|~<>{}]{2,}', text)[0]
-    
-    # Clean binary ID tags like #24275
-    text = re.sub(r'#\d+', '', text)
-    
-    # Clean extra spaces
-    text = re.sub(r'\s+', ' ', text).strip()
-    return text
-
-def is_valid_recipe_line(line):
-    line = line.strip()
-    if not line or len(line) < 3:
-        return False
-    # Reject lines with long repeating char sequences e.g. "qrrrsssrss", "888ppp"
-    if re.search(r'(.)\1{3,}', line):
-        return False
-    # Reject lines with high proportion of random lowercase characters with no spaces
-    if len(line) > 12 and ' ' not in line and not re.search(r'[:=/-]', line):
-        return False
-    # Reject binary noise
-    if re.search(r'[\{\}\<\>\\@\^~]{2,}', line):
-        return False
-    if re.search(r'(?:CProcessFile|COven|CZone|Paqfile)', line, re.IGNORECASE):
-        return False
-    # Must contain meaningful text or numbers
-    if not re.search(r'[A-Za-z0-9]', line):
-        return False
-    return True
-
-def score_probe_label(text):
-    """Scores a candidate probe label. Higher score = real human readable location."""
-    if not text or len(text) < 3:
-        return -100
-    if re.search(r'(.)\1{3,}', text): return -100
-    if re.search(r'[0-9/]{4,}', text): return -100
-    if re.search(r'^[0-9\W]+$', text): return -100
-    
-    score = 0
-    keywords = [
-        "cooler", "bottom", "top", "drill", "insert", "probe", "inside", "H/D",
-        "core", "center", "left", "right", "front", "rear", "FR", "RR", "LH", "RH",
-        "Mitsubishi", "Stacking", "surface", "air", "ambient", "middle"
-    ]
-    for kw in keywords:
-        if re.search(rf'\b{re.escape(kw)}\b', text, re.IGNORECASE):
-            score += 10
-            
-    words = text.split()
-    if len(words) >= 2:
-        score += len(words) * 2
-        
-    for w in words:
-        if len(w) >= 4 and not re.search(r'[aeiouAEIOU0-9]', w):
-            score -= 15
-            
-    return score
-
-def parse_operator_and_metadata(raw_comments_list):
-    """Extracts Operator Name, Company, Site, and Clean Comments."""
-    combined_raw = " ".join(raw_comments_list)
-    
-    operator_name = "N/A"
-    company = "N/A"
-    site = "N/A"
-    
-    # 1. Extract Company
-    m_comp = re.search(r'\b(VSTS|Datapaq)\b', combined_raw, re.IGNORECASE)
-    if not m_comp:
-        m_comp = re.search(r'Company[:\s]+([A-Za-z0-9_\-\.]+)', combined_raw, re.IGNORECASE)
-    if m_comp:
-        company = m_comp.group(1 if m_comp.lastindex >= 1 else 0).strip()
-        
-    # 2. Extract Site
-    m_site = re.search(r'(Power\s+Chonburi|Chonburi|Plant\s+\d+|Factory\s+\d+)', combined_raw, re.IGNORECASE)
-    if not m_site:
-        m_site = re.search(r'Site[:\s]+([A-Za-z0-9\s_\-\.]+)', combined_raw, re.IGNORECASE)
-    if m_site:
-        site = m_site.group(0).strip()
-
-    # Clean the comments text first
-    clean_text = clean_paq_text(combined_raw)
-
-    # 3. Extract Operator Name
-    m_op = re.search(r'(?:CPaqfile|Operator|User)[:\s]+([A-Za-z0-9_\-\.]+)', combined_raw, re.IGNORECASE)
-    if not m_op:
-        m_op = re.search(r'^\s*([A-Z][a-z]{2,15})\b(?:\s+(?:Monthly|WK|date|product|validation|run|test|profile))', clean_text, re.IGNORECASE)
-        
+    # Extract Operator
+    m_op = re.search(r'\b(Sunisa|[A-Z][a-z]{3,15})\b\s+(?:Monthly|WK|date|product|validation|run|test)', combined, re.IGNORECASE)
     if m_op:
-        operator_name = m_op.group(1).strip()
+        op = m_op.group(1).strip()
+    elif "Sunisa" in combined:
+        op = "Sunisa"
 
-    # Strip operator_name, company, site tokens from final notes box
-    if operator_name != "N/A":
-        clean_text = re.sub(rf'^\s*{re.escape(operator_name)}\b', '', clean_text).strip()
-    if company != "N/A":
-        clean_text = re.sub(rf'\b{re.escape(company)}\b', '', clean_text, flags=re.IGNORECASE).strip()
-    if site != "N/A":
-        clean_text = re.sub(rf'\b{re.escape(site)}\b', '', clean_text, flags=re.IGNORECASE).strip()
+    # Remove extracted tokens from text
+    clean_notes = combined
+    for token in [op, comp, site]:
+        if token != "N/A":
+            clean_notes = re.sub(rf'\b{re.escape(token)}\b', '', clean_notes, flags=re.IGNORECASE)
 
-    clean_text = re.sub(r'\s+', ' ', clean_text).strip()
-    return operator_name, company, site, clean_text if clean_text else "N/A"
+    clean_notes = re.sub(r'\s+', ' ', clean_notes).strip()
+    return op, comp, site, clean_notes if clean_notes else "N/A"
 
 @st.cache_data
 def process_paq_file(file_bytes, filename):
@@ -323,15 +233,12 @@ def process_paq_file(file_bytes, filename):
         probe_folder = stream_path[-1]
         probe_num = int(''.join(filter(str.isdigit, probe_folder))) + 1 if any(c.isdigit() for c in probe_folder) else len(all_probes) + 1
         col_name = f"PB#{probe_num}"
-
         d = decompress_stream(ole, stream_name)
         if d:
             series = extract_probe_series_autonomously(d)
-            if series:
-                all_probes[col_name] = series
+            if series: all_probes[col_name] = series
 
-    if not all_probes:
-        return None
+    if not all_probes: return None
 
     max_samples = max(len(v) for v in all_probes.values())
     aligned_probes = {k: (v + [np.nan] * (max_samples - len(v)) if len(v) < max_samples else v) for k, v in all_probes.items()}
@@ -342,50 +249,39 @@ def process_paq_file(file_bytes, filename):
 
     probe_cols = [col for col in df_master.columns if col.startswith("PB#")]
 
-    # 2. Entrance Detection (60°C for 15s)
+    # 2. Entrance Detection
     SUSTAINED_SECONDS = 15
     probe_start_secs = {}
-
     for col in probe_cols:
         is_p60 = (df_master[col] >= 60.0)
         valid_p_mask = is_p60.copy()
         for i in range(1, SUSTAINED_SECONDS):
             valid_p_mask = valid_p_mask & is_p60.shift(-i, fill_value=False)
-
-        p_sec = int(df_master[valid_p_mask].iloc[0]["Time_Seconds"]) if valid_p_mask.any() else 0
-        probe_start_secs[col] = p_sec
+        probe_start_secs[col] = int(df_master[valid_p_mask].iloc[0]["Time_Seconds"]) if valid_p_mask.any() else 0
 
     valid_starts = [sec for sec in probe_start_secs.values() if sec > 0]
     detected_start_sec = min(valid_starts) if valid_starts else 0
     first_probe_name = [k for k, v in probe_start_secs.items() if v == detected_start_sec][0] if valid_starts else probe_cols[0]
-
-    start_row = df_master[df_master["Time_Seconds"] == detected_start_sec].iloc[0]
-    detected_start_hhmmss = start_row["Time_HHMMSS"]
+    detected_start_hhmmss = df_master[df_master["Time_Seconds"] == detected_start_sec].iloc[0]["Time_HHMMSS"]
 
     # 3. Stream Scanning Loop for Metadata, Recipe, Image, and Probe Locations
-    found_comments, found_recipe_items = [], []
-    probe_locations = {}
-    probe_scores = {col: -999 for col in probe_cols}
+    found_comments, found_recipes, found_probes = [], [], []
     embedded_img = None
 
     for stream_path in ole.listdir():
-        s_name = "/".join(stream_path)
         try:
             raw_b = ole.openstream(stream_path).read()
             if not raw_b: continue
-
             data_b = raw_b
             if raw_b.startswith(b'ZLIB') or b'x\x9c' in raw_b[:20]:
-                try: 
-                    z_data = raw_b[8:] if raw_b.startswith(b'ZLIB') else raw_b
-                    data_b = zlib.decompress(z_data)
+                try: data_b = zlib.decompress(raw_b[8:] if raw_b.startswith(b'ZLIB') else raw_b)
                 except Exception:
-                    try: data_b = zlib.decompress(z_data, -zlib.MAX_WBITS)
-                    except Exception: data_b = raw_b
+                    try: data_b = zlib.decompress(raw_b[8:] if raw_b.startswith(b'ZLIB') else raw_b, -zlib.MAX_WBITS)
+                    except Exception: pass
 
-            # Extract Raster Image
+            # Extract Image
             if embedded_img is None and len(data_b) > 500:
-                for header, format_type in [(b'\x89PNG\r\n\x1a\n', 'PNG'), (b'\xff\xd8\xff', 'JPEG'), (b'BM', 'BMP')]:
+                for header in [b'\x89PNG\r\n\x1a\n', b'\xff\xd8\xff', b'BM']:
                     idx = data_b.find(header)
                     if idx != -1:
                         try:
@@ -397,43 +293,62 @@ def process_paq_file(file_bytes, filename):
             ascii_matches = re.findall(rb'[\x20-\x7E]{4,}', data_b)
             for m in ascii_matches:
                 s_raw = m.decode('ascii', errors='ignore').strip()
-
-                # A. Collect Comments
-                if any(k in s_name.lower() for k in ["comment", "notes", "header", "paqfile0"]):
-                    if len(s_raw) >= 3 and s_raw not in found_comments:
-                        found_comments.append(s_raw)
-
-                # B. Collect Recipe / Process Settings
-                if any(kw in s_raw for kw in ["O2 Exit", "ppm", "CV speed", "mm/min", "N2 Flow", "WJ Flow", "Top Temp", "Bot temp", "SP2", "SP1", "Recipe", "Process"]):
-                    if is_valid_recipe_line(s_raw):
-                        s_rec_clean = clean_paq_text(s_raw)
-                        if s_rec_clean and s_rec_clean not in found_recipe_items:
-                            found_recipe_items.append(s_rec_clean)
-
-                # C. Collect Thermocouple Probe Locations
-                s_probe_clean = re.sub(r'^\s*CProbe\s*>?', '', s_raw).strip()
-                s_probe_clean = clean_paq_text(s_probe_clean)
                 
-                for idx in range(1, len(probe_cols) + 1):
-                    ch_key = f"PB#{idx}"
-                    if re.search(rf'#?\b{idx}\b', s_probe_clean):
-                        score = score_probe_label(s_probe_clean)
-                        if score > probe_scores[ch_key]:
-                            probe_scores[ch_key] = score
-                            probe_locations[ch_key] = s_probe_clean
+                # A) CLEAN SYSTEM CLASSES AND PATH NOISE
+                s_raw = re.sub(r'\b(CAxisCustomUnits|CPaqfile|CByteDataArray|CProbeResult|CFurnaceRecipe|CZoom|CProbeMapEntry|cho1-sv|CProcessFile|COven|CZone|CRecipe)\b', '', s_raw).strip()
+                s_raw = re.sub(r'#\d{5}\b', '', s_raw).strip()
+                
+                if not s_raw or len(s_raw) < 3: continue
 
+                # B) SKIP FILE PATHS
+                if re.search(r'\b[A-Z]:\\[A-Za-z0-9\\]', s_raw, re.IGNORECASE) or \
+                   re.search(r'\\\\', s_raw) or \
+                   re.search(r'\.(ovn|prd|pro|rec|paq)\b', s_raw, re.IGNORECASE):
+                    continue
+
+                # C) ROUTE TEXT TO CORRECT BUCKETS
+                # 1. Probes (Starts with #1 to #8 or PB#1)
+                if re.match(r'^#?[1-8]\s*[\(°C\)]', s_raw) or re.match(r'^PB#[1-8]', s_raw, re.IGNORECASE):
+                    if s_raw not in found_probes:
+                        found_probes.append(s_raw)
+                        
+                # 2. Recipes (Contains Process Setup Keywords)
+                elif any(kw in s_raw for kw in ["O2 Exit", "ppm", "CV speed", "mm/min", "N2 Flow", "WJ Flow", "Top Temp", "Bot temp", "SP2", "SP1", "==>"]):
+                    if s_raw not in found_recipes:
+                        found_recipes.append(s_raw)
+                        
+                # 3. Comments (General clean strings)
+                else:
+                    # Filter out digital repeating gibberish
+                    if not re.search(r'(.)\1{4,}', s_raw) and not re.search(r'^[0-9\W]+$', s_raw):
+                        if s_raw not in found_comments:
+                            found_comments.append(s_raw)
         except Exception:
             continue
 
-    # Ensure all PB#1..PB#8 channels have a fallback if score <= 0
+    # Process and Map Probes
+    probe_locations = {}
+    for s in found_probes:
+        # Match pattern: "#1 (°C) Bottom cooler..."
+        m = re.match(r'^#?([1-8])\s*[\(°C\)]*\s*[-:]?\s*(.+)', s)
+        if m:
+            ch_key = f"PB#{m.group(1)}"
+            loc_desc = m.group(2).strip()
+            label = f"#{m.group(1)} (°C) {loc_desc}"
+            # Keep the most descriptive version
+            if ch_key not in probe_locations or len(label) > len(probe_locations[ch_key]):
+                probe_locations[ch_key] = label
+
+    # Fill fallback probe locations if missing
     for col in probe_cols:
-        if col not in probe_locations or probe_scores.get(col, -999) <= 0:
+        if col not in probe_locations:
             probe_locations[col] = f"Channel {col.replace('PB#', '')} (Unlabeled)"
 
+    # Finalize Metadata
     operator_name, company, site, clean_comments_text = parse_operator_and_metadata(found_comments)
-    process_settings = "\n".join(found_recipe_items) if found_recipe_items else "Standard Recipe Parameters"
+    process_settings = "\n".join(found_recipes) if found_recipes else "Standard Recipe Parameters"
 
-    # 5. STRICT PRIORITY AUTOMATIC FURNACE SELECTION LOGIC
+    # 4. STRICT PRIORITY AUTOMATIC FURNACE SELECTION LOGIC
     recipe_corpus = f"{process_settings} {clean_comments_text} {filename}"
 
     furnace_id = "NB3"
@@ -441,89 +356,40 @@ def process_paq_file(file_bytes, filename):
 
     if re.search(r'\b(KE8|M2|EVO|BTM)\b', recipe_corpus, re.IGNORECASE):
         furnace_id = "NB3"
-        if re.search(r'\bBTM\b', recipe_corpus, re.IGNORECASE):
-            furnace_variant = "NB3 (BTM)"
-        else:
-            furnace_variant = "NB3 (KE8/M2/EVO)"
-
+        if re.search(r'\bBTM\b', recipe_corpus, re.IGNORECASE): furnace_variant = "NB3 (BTM)"
+        else: furnace_variant = "NB3 (KE8/M2/EVO)"
     elif re.search(r'\b(Tahc|Utahc)\b', recipe_corpus, re.IGNORECASE):
         furnace_id = "NB2"
         furnace_variant = "NB2 (Tahc/Utahc)"
-
     elif re.search(r'\b(RAD|CDS|KN9|12SHP)\b', recipe_corpus, re.IGNORECASE):
         furnace_id = "NB1"
-        if re.search(r'\bRAD\b', recipe_corpus, re.IGNORECASE):
-            furnace_variant = "NB1 (RAD)"
-        else:
-            furnace_variant = "NB1 (CDS/KN9/12SHP)"
-
-    elif (re.search(r'\bWK\d{1,2}\b', recipe_corpus, re.IGNORECASE) or 
-          re.search(r'\b\d{6}\b', recipe_corpus)):
+        if re.search(r'\bRAD\b', recipe_corpus, re.IGNORECASE): furnace_variant = "NB1 (RAD)"
+        else: furnace_variant = "NB1 (CDS/KN9/12SHP)"
+    elif (re.search(r'\bWK\d{1,2}\b', recipe_corpus, re.IGNORECASE) or re.search(r'\b\d{6}\b', recipe_corpus)):
         furnace_id = "NB1"
         furnace_variant = "NB1 (Standard)"
-
     else:
         f_match = re.search(r'NB\s*Furnace\s*0?([123])\b|NB\s*#?\s*0?([123])\b|NB-0?([123])\b', recipe_corpus, re.IGNORECASE)
         if f_match:
-            num = [g for g in f_match.groups() if g is not None][0]
-            furnace_id = f"NB{num}"
+            furnace_id = f"NB{f_match.group(1)}"
             furnace_variant = furnace_id
 
+    # Retrieve and apply overrides
     base_cfg = FURNACE_CONFIGS.get(furnace_id, FURNACE_CONFIGS["NB3"])
     cfg = dict(base_cfg)
 
     if "RAD" in furnace_variant:
-        cfg["dryer_dwell_thresh_1"] = 150.0
-        cfg["dryer_dwell_thresh_2"] = 175.0
-        cfg["debinder_dwell_thresh"] = 200.0
-        cfg["brazing_dwell_thresh_1"] = 550.0
-        cfg["brazing_dwell_thresh_2"] = 583.0
-        cfg["brazing_dwell_thresh_3"] = 591.0
-        cfg["brazing_dwell_thresh_4"] = 600.0
-        cfg["trigger_temp_brazing"] = 577.0
-
+        cfg.update({"dryer_dwell_thresh_1": 150.0, "dryer_dwell_thresh_2": 175.0, "debinder_dwell_thresh": 200.0, "brazing_dwell_thresh_1": 550.0, "brazing_dwell_thresh_2": 583.0, "brazing_dwell_thresh_3": 591.0, "brazing_dwell_thresh_4": 600.0})
     elif "NB1" in furnace_variant:
-        cfg["dryer_dwell_thresh_1"] = 150.0
-        cfg["dryer_dwell_thresh_2"] = 200.0
-        cfg["debinder_dwell_thresh"] = 300.0
-        cfg["brazing_dwell_thresh_1"] = 550.0
-        cfg["brazing_dwell_thresh_2"] = 577.0
-        cfg["brazing_dwell_thresh_3"] = 591.0
-        cfg["brazing_dwell_thresh_4"] = 600.0
-        cfg["trigger_temp_brazing"] = 577.0
-
+        cfg.update({"dryer_dwell_thresh_1": 150.0, "dryer_dwell_thresh_2": 200.0, "debinder_dwell_thresh": 300.0, "brazing_dwell_thresh_1": 550.0, "brazing_dwell_thresh_2": 577.0, "brazing_dwell_thresh_3": 591.0, "brazing_dwell_thresh_4": 600.0})
     elif "NB2" in furnace_variant:
-        cfg["dryer_dwell_thresh_1"] = 200.0
-        cfg["dryer_dwell_thresh_2"] = 250.0
-        cfg["debinder_dwell_thresh"] = None
-        cfg["brazing_dwell_thresh_1"] = 550.0
-        cfg["brazing_dwell_thresh_2"] = 577.0
-        cfg["brazing_dwell_thresh_3"] = 591.0
-        cfg["brazing_dwell_thresh_4"] = 600.0
-        cfg["trigger_temp_brazing"] = 577.0
-
+        cfg.update({"dryer_dwell_thresh_1": 200.0, "dryer_dwell_thresh_2": 250.0, "debinder_dwell_thresh": None, "brazing_dwell_thresh_1": 550.0, "brazing_dwell_thresh_2": 577.0, "brazing_dwell_thresh_3": 591.0, "brazing_dwell_thresh_4": 600.0})
     elif "BTM" in furnace_variant:
-        cfg["dryer_dwell_thresh_1"] = 250.0
-        cfg["dryer_dwell_thresh_2"] = 300.0
-        cfg["debinder_dwell_thresh"] = None
-        cfg["brazing_dwell_thresh_1"] = 550.0
-        cfg["brazing_dwell_thresh_2"] = 577.0
-        cfg["brazing_dwell_thresh_3"] = 591.0
-        cfg["brazing_dwell_thresh_4"] = 600.0
-        cfg["trigger_temp_brazing"] = 577.0
-
+        cfg.update({"dryer_dwell_thresh_1": 250.0, "dryer_dwell_thresh_2": 300.0, "debinder_dwell_thresh": None, "brazing_dwell_thresh_1": 550.0, "brazing_dwell_thresh_2": 577.0, "brazing_dwell_thresh_3": 591.0, "brazing_dwell_thresh_4": 600.0})
     elif "NB3" in furnace_variant:
-        cfg["dryer_dwell_thresh_1"] = 150.0
-        cfg["dryer_dwell_thresh_2"] = 200.0
-        cfg["debinder_dwell_thresh"] = None
-        cfg["brazing_dwell_thresh_1"] = 550.0
-        cfg["brazing_dwell_thresh_2"] = 577.0
-        cfg["brazing_dwell_thresh_3"] = 591.0
-        cfg["brazing_dwell_thresh_4"] = 600.0
-        cfg["trigger_temp_brazing"] = 577.0
+        cfg.update({"dryer_dwell_thresh_1": 150.0, "dryer_dwell_thresh_2": 200.0, "debinder_dwell_thresh": None, "brazing_dwell_thresh_1": 550.0, "brazing_dwell_thresh_2": 577.0, "brazing_dwell_thresh_3": 591.0, "brazing_dwell_thresh_4": 600.0})
 
     line_speed_mpm = cfg["line_speed_mpm"]
-
     cv_sp_matches = re.findall(r'CV\s*SP\s*[:=]?\s*(\d{3,4})\s*(?:mm/\s*min|mm)?', recipe_corpus, re.IGNORECASE)
     if cv_sp_matches:
         last_speed = float(cv_sp_matches[-1])
@@ -531,41 +397,27 @@ def process_paq_file(file_bytes, filename):
             line_speed_mpm = last_speed / 1000.0
 
     df_master["Distance_Meters"] = ((df_master["Time_Seconds"] - detected_start_sec) / 60.0) * line_speed_mpm
-
     probe_start_info = {}
     for col in probe_cols:
         p_sec = probe_start_secs[col]
-        offset_sec = p_sec - detected_start_sec
-        offset_m = (offset_sec / 60.0) * line_speed_mpm
+        offset_m = ((p_sec - detected_start_sec) / 60.0) * line_speed_mpm
         df_master[f"Distance_{col}"] = ((df_master["Time_Seconds"] - p_sec) / 60.0) * line_speed_mpm
-        p_hhmmss = df_master[df_master["Time_Seconds"] == p_sec].iloc[0]["Time_HHMMSS"] if p_sec < len(df_master) else "00:00:00"
-
         probe_start_info[col] = {
             "Start_Sec": p_sec,
-            "Start_HHMMSS": p_hhmmss,
-            "Offset_Sec": offset_sec,
+            "Start_HHMMSS": df_master[df_master["Time_Seconds"] == p_sec].iloc[0]["Time_HHMMSS"] if p_sec < len(df_master) else "00:00:00",
+            "Offset_Sec": p_sec - detected_start_sec,
             "Offset_Meters": round(offset_m, 2),
             "Is_First": (col == first_probe_name)
         }
 
     return {
-        "filename": filename,
-        "df_master": df_master,
-        "probe_cols": probe_cols,
-        "furnace_id": furnace_id,
-        "furnace_variant": furnace_variant,
-        "cfg": cfg,
-        "line_speed_mpm": line_speed_mpm,
-        "detected_start_sec": detected_start_sec,
-        "detected_start_hhmmss": detected_start_hhmmss,
-        "first_probe_name": first_probe_name,
-        "operator_name": operator_name,
-        "company": company,
-        "site": site,
-        "operator_comment": clean_comments_text,
-        "process_settings": process_settings,
-        "probe_locations": probe_locations,
-        "probe_start_info": probe_start_info,
+        "filename": filename, "df_master": df_master, "probe_cols": probe_cols,
+        "furnace_id": furnace_id, "furnace_variant": furnace_variant, "cfg": cfg,
+        "line_speed_mpm": line_speed_mpm, "detected_start_sec": detected_start_sec,
+        "detected_start_hhmmss": detected_start_hhmmss, "first_probe_name": first_probe_name,
+        "operator_name": operator_name, "company": company, "site": site,
+        "operator_comment": clean_comments_text, "process_settings": process_settings,
+        "probe_locations": probe_locations, "probe_start_info": probe_start_info,
         "embedded_img": embedded_img
     }
 
@@ -575,11 +427,9 @@ def process_paq_file(file_bytes, filename):
 st.title("🔥 Datapaq .PAQ Furnace Profiler & Analyzer")
 st.markdown("Automated thermal profile extraction, zone metrics, and multi-file comparison.")
 
-# Sidebar Upload Controls
 with st.sidebar:
     st.header("📁 File Upload")
     uploaded_file1 = st.file_uploader("Upload Main .PAQ File", type=["paq"], key="paq1")
-    
     st.markdown("---")
     st.header("⚖️ Comparison Option")
     uploaded_file2 = st.file_uploader("Upload 2nd .PAQ File (Optional)", type=["paq"], key="paq2")
@@ -587,19 +437,13 @@ with st.sidebar:
 if not uploaded_file1:
     st.info("👈 Please upload a `.paq` binary file using the sidebar to begin analysis.")
 else:
-    # Process Main PAQ File
     data1 = process_paq_file(uploaded_file1.getvalue(), uploaded_file1.name)
     if not data1:
         st.error("❌ Failed to parse valid probe temperature streams from the uploaded file.")
         st.stop()
 
-    df_m1 = data1["df_master"]
-    f_variant = data1["furnace_variant"]
-    cfg = data1["cfg"]
-    zones = cfg["zones"]
-    probe_cols = data1["probe_cols"]
+    df_m1, f_variant, cfg, zones, probe_cols = data1["df_master"], data1["furnace_variant"], data1["cfg"], data1["cfg"]["zones"], data1["probe_cols"]
 
-    # Top Metrics Banner
     st.success(f"✓ File Loaded Successfully: **{data1['filename']}**")
     m_col1, m_col2, m_col3, m_col4 = st.columns(4)
     m_col1.metric("Confirmed Furnace", f_variant)
@@ -607,168 +451,84 @@ else:
     m_col3.metric("Lead Probe Entrance", f"{data1['first_probe_name']} @ {data1['detected_start_hhmmss']}")
     m_col4.metric("Total Duration", f"{len(df_m1)}s (~{len(df_m1)/60:.1f} min)")
 
-    # Main Tabs Navigation
-    tabs = st.tabs([
-        "📊 Profile Graphs",
-        "📝 Metadata & Probe Map",
-        "🏭 Zone & Stage Summary",
-        "📈 Statistics & Boxplots",
-        "💾 Master Dataset & Export",
-        "⚖️ Compare Files"
-    ])
+    tabs = st.tabs(["📊 Profile Graphs", "📝 Metadata & Probe Map", "🏭 Zone & Stage Summary", "📈 Statistics & Boxplots", "💾 Master Dataset & Export", "⚖️ Compare Files"])
 
-    # --------------------------------------------------------------------------
-    # TAB 1: PROFILE GRAPHS
-    # --------------------------------------------------------------------------
     with tabs[0]:
         st.subheader("Global Furnace Profile (Distance Aligned)")
-        
-        # Chart 1: Global Profile
         fig1 = go.Figure()
         custom_hover1 = np.stack((df_m1["Time_HHMMSS"], df_m1["Time_Seconds"], df_m1["Distance_Meters"]), axis=-1)
-
         for col in probe_cols:
-            fig1.add_trace(go.Scatter(
-                x=df_m1["Distance_Meters"], y=df_m1[col], mode="lines", name=col,
-                customdata=custom_hover1,
-                hovertemplate="%{fullData.name}: %{y:.1f} °C<br>Time: %{customdata[0]} (%{customdata[1]}s)<br>Dist: %{x:.2f} m"
-            ))
-
+            fig1.add_trace(go.Scatter(x=df_m1["Distance_Meters"], y=df_m1[col], mode="lines", name=col, customdata=custom_hover1, hovertemplate="%{fullData.name}: %{y:.1f} °C<br>Time: %{customdata[0]} (%{customdata[1]}s)<br>Dist: %{x:.2f} m"))
         for z in zones:
             z_color = GROUP_COLORS.get(z["group"], "rgba(200, 200, 200, 0.2)")
-            fig1.add_vrect(
-                x0=z["start"], x1=z["start"] + z["length"], fillcolor=z_color, layer="below",
-                line_width=0.5, line_dash="dot", line_color="rgba(120, 120, 120, 0.4)",
-                annotation_text=f"{z['num']}.{z['name']}", annotation_position="top left",
-                annotation=dict(font_size=9, font_color="#222222", textangle=-90)
-            )
-
-        fig1.add_hline(y=cfg["trigger_temp_brazing"], line_dash="dash", line_color="red",
-                       annotation_text=f"Brazing ({cfg['trigger_temp_brazing']}°C)", annotation_position="bottom right")
-
-        fig1.update_layout(
-            title=f"GLOBAL FURNACE PROFILE ({f_variant}): {data1['filename']}",
-            xaxis_title="Furnace Distance (Meters from Entrance)", yaxis_title="Temperature (°C)",
-            hovermode="x unified", template="plotly_white", height=550
-        )
+            fig1.add_vrect(x0=z["start"], x1=z["start"] + z["length"], fillcolor=z_color, layer="below", line_width=0.5, line_dash="dot", line_color="rgba(120, 120, 120, 0.4)", annotation_text=f"{z['num']}.{z['name']}", annotation_position="top left", annotation=dict(font_size=9, font_color="#222222", textangle=-90))
+        fig1.add_hline(y=cfg["trigger_temp_brazing"], line_dash="dash", line_color="red", annotation_text=f"Brazing ({cfg['trigger_temp_brazing']}°C)", annotation_position="bottom right")
+        fig1.update_layout(title=f"GLOBAL FURNACE PROFILE ({f_variant}): {data1['filename']}", xaxis_title="Furnace Distance (Meters from Entrance)", yaxis_title="Temperature (°C)", hovermode="x unified", template="plotly_white", height=550)
         st.plotly_chart(fig1, use_container_width=True)
 
         st.markdown("---")
         st.subheader("Individually Aligned Probe Chart (Own 60°C Entry)")
-
-        # Chart 2: Individually Aligned
         fig2 = go.Figure()
         for col in probe_cols:
             offset_m = data1["probe_start_info"][col]["Offset_Meters"]
             indiv_hover = np.stack((df_m1["Time_HHMMSS"], df_m1["Time_Seconds"], np.full(len(df_m1), offset_m)), axis=-1)
-            fig2.add_trace(go.Scatter(
-                x=df_m1[f"Distance_{col}"], y=df_m1[col], mode="lines",
-                name=f"{col} (+{offset_m:.2f}m)" if offset_m > 0 else f"{col} (Lead)",
-                customdata=indiv_hover,
-                hovertemplate="%{fullData.name}: %{y:.1f} °C<br>Indiv Dist: %{x:.2f} m<br>Time: %{customdata[0]}"
-            ))
-
+            fig2.add_trace(go.Scatter(x=df_m1[f"Distance_{col}"], y=df_m1[col], mode="lines", name=f"{col} (+{offset_m:.2f}m)" if offset_m > 0 else f"{col} (Lead)", customdata=indiv_hover, hovertemplate="%{fullData.name}: %{y:.1f} °C<br>Indiv Dist: %{x:.2f} m<br>Time: %{customdata[0]}"))
         for z in zones:
             z_color = GROUP_COLORS.get(z["group"], "rgba(200, 200, 200, 0.2)")
-            fig2.add_vrect(
-                x0=z["start"], x1=z["start"] + z["length"], fillcolor=z_color, layer="below",
-                line_width=0.5, line_dash="dot", line_color="rgba(120, 120, 120, 0.4)",
-                annotation_text=f"{z['num']}.{z['name']}", annotation_position="top left",
-                annotation=dict(font_size=9, font_color="#222222", textangle=-90)
-            )
-
-        fig2.update_layout(
-            title=f"INDIVIDUALLY ALIGNED PROFILES ({f_variant}): {data1['filename']}",
-            xaxis_title="Individual Probe Distance (Meters from Probe's 60°C Entry)", yaxis_title="Temperature (°C)",
-            hovermode="x unified", template="plotly_white", height=550
-        )
+            fig2.add_vrect(x0=z["start"], x1=z["start"] + z["length"], fillcolor=z_color, layer="below", line_width=0.5, line_dash="dot", line_color="rgba(120, 120, 120, 0.4)", annotation_text=f"{z['num']}.{z['name']}", annotation_position="top left", annotation=dict(font_size=9, font_color="#222222", textangle=-90))
+        fig2.update_layout(title=f"INDIVIDUALLY ALIGNED PROFILES ({f_variant}): {data1['filename']}", xaxis_title="Individual Probe Distance (Meters from Probe's 60°C Entry)", yaxis_title="Temperature (°C)", hovermode="x unified", template="plotly_white", height=550)
         st.plotly_chart(fig2, use_container_width=True)
 
-    # --------------------------------------------------------------------------
-    # TAB 2: METADATA & PROBE MAP (STRUCTURED & CLEANED)
-    # --------------------------------------------------------------------------
     with tabs[1]:
         col_a, col_b = st.columns(2)
         with col_a:
             st.subheader("📝 Operator Metadata & Recipe Settings")
-            
-            # Individual Boxes for Structured Operator Info
             m1, m2, m3 = st.columns(3)
             m1.text_input("👤 Operator Name", data1["operator_name"], disabled=True)
             m2.text_input("🏢 Company", data1["company"], disabled=True)
             m3.text_input("📍 Site", data1["site"], disabled=True)
-
-            st.text_area("💬 Additional Comments / Notes", data1["operator_comment"], height=160)
-            st.text_area("⚙️ Recipe / Process Settings", data1["process_settings"], height=220)
+            st.text_area("💬 Additional Comments / Notes", data1["operator_comment"], height=200)
+            st.text_area("⚙️ Recipe / Process Settings", data1["process_settings"], height=200)
 
         with col_b:
             st.subheader("📍 Thermocouple Channel Locations")
             if data1["probe_locations"]:
-                # Sort probes numerically (PB#1 to PB#8)
-                sorted_probes = sorted(
-                    data1["probe_locations"].items(),
-                    key=lambda x: int(x[0].replace("PB#", "")) if x[0].replace("PB#", "").isdigit() else 0
-                )
-                df_loc = pd.DataFrame([{"Channel": k, "Attached Location": v} for k, v in sorted_probes])
-                st.dataframe(df_loc, use_container_width=True, hide_index=True)
+                sorted_probes = sorted(data1["probe_locations"].items(), key=lambda x: int(x[0].replace("PB#", "")) if x[0].replace("PB#", "").isdigit() else 0)
+                st.dataframe(pd.DataFrame([{"Channel": k, "Attached Location": v} for k, v in sorted_probes]), use_container_width=True, hide_index=True)
             else:
                 st.info("No explicit probe location mapping found in PAQ header.")
-
             if data1["embedded_img"]:
                 st.subheader("🖼️ Embedded PAQ Image")
                 st.image(data1["embedded_img"], use_container_width=True)
 
         st.subheader("⏱️ Individual Probe Entry Alignment Table (60°C Entry)")
-        shift_rows = []
-        for col, info in data1["probe_start_info"].items():
-            status = "🏆 First (Lead)" if info["Is_First"] else f"+{info['Offset_Meters']:.2f} m lag"
-            shift_rows.append({
-                "Probe": col,
-                "Start Time (HH:MM:SS)": info["Start_HHMMSS"],
-                "Start Sec": f"{info['Start_Sec']}s",
-                "Lag Time vs First": f"+{info['Offset_Sec']}s" if info['Offset_Sec'] > 0 else "0s (Lead)",
-                "Distance Shift": f"+{info['Offset_Meters']:.2f} m" if info['Offset_Meters'] > 0 else "0.00 m (Lead)",
-                "Status": status
-            })
+        shift_rows = [{"Probe": col, "Start Time (HH:MM:SS)": info["Start_HHMMSS"], "Start Sec": f"{info['Start_Sec']}s", "Lag Time vs First": f"+{info['Offset_Sec']}s" if info['Offset_Sec'] > 0 else "0s (Lead)", "Distance Shift": f"+{info['Offset_Meters']:.2f} m" if info['Offset_Meters'] > 0 else "0.00 m (Lead)", "Status": "🏆 First (Lead)" if info["Is_First"] else f"+{info['Offset_Meters']:.2f} m lag"} for col, info in data1["probe_start_info"].items()]
         st.dataframe(pd.DataFrame(shift_rows), use_container_width=True, hide_index=True)
 
-    # --------------------------------------------------------------------------
-    # TAB 3: ZONE & STAGE SUMMARY
-    # --------------------------------------------------------------------------
     with tabs[2]:
         st.subheader("🔥 Zone Peak Temperature Table")
         zone_max_records = []
         for z in zones:
-            z_start, z_end = z["start"], round(z["start"] + z["length"], 2)
-            z_df = df_m1[(df_m1["Distance_Meters"] >= z_start) & (df_m1["Distance_Meters"] < z_end)]
-            row_dict = {"Group": z["group"], "Zone #": z["num"], "Zone Name": z["name"], "Start (m)": z_start, "End (m)": z_end}
+            z_df = df_m1[(df_m1["Distance_Meters"] >= z["start"]) & (df_m1["Distance_Meters"] < round(z["start"] + z["length"], 2))]
+            r = {"Group": z["group"], "Zone #": z["num"], "Zone Name": z["name"], "Start (m)": z["start"], "End (m)": round(z["start"] + z["length"], 2)}
             if not z_df.empty and probe_cols:
                 max_s = z_df[probe_cols].max()
-                for col in probe_cols: 
-                    row_dict[col] = max_s[col]
-                row_dict["Zone Peak (°C)"] = max_s.max()
-                row_dict["Hot Probe"] = max_s.idxmax()
+                for col in probe_cols: r[col] = max_s[col]
+                r["Zone Peak (°C)"] = max_s.max()
+                r["Hot Probe"] = max_s.idxmax()
             else:
-                for col in probe_cols: 
-                    row_dict[col] = np.nan
-                row_dict["Zone Peak (°C)"] = np.nan
-                row_dict["Hot Probe"] = "-"
-            zone_max_records.append(row_dict)
+                for col in probe_cols: r[col] = np.nan
+                r["Zone Peak (°C)"], r["Hot Probe"] = np.nan, "-"
+            zone_max_records.append(r)
 
         df_zone_summary = pd.DataFrame(zone_max_records)
-        
-        # Safe Render with Gradient Fallback
-        try:
-            styled_zone_df = df_zone_summary.style.background_gradient(cmap="OrRd", subset=probe_cols + ["Zone Peak (°C)"])
-            st.dataframe(styled_zone_df, use_container_width=True)
-        except Exception:
-            st.dataframe(df_zone_summary, use_container_width=True)
+        try: st.dataframe(df_zone_summary.style.background_gradient(cmap="OrRd", subset=probe_cols + ["Zone Peak (°C)"]), use_container_width=True)
+        except Exception: st.dataframe(df_zone_summary, use_container_width=True)
 
         st.markdown("---")
         st.subheader(f"⏱️ Inspection Matrix — {f_variant}")
         stages = cfg["stages"]
         has_debinder = any(s["Stage"] == "Debinder" for s in stages)
-        
         dryer_info = next((s for s in stages if s["Stage"] == "Dryer"), stages[0])
         debinder_info = next((s for s in stages if s["Stage"] == "Debinder"), None) if has_debinder else None
         brazing_info = next((s for s in stages if s["Stage"] == "Brazing"), stages[-1])
@@ -779,55 +539,23 @@ else:
 
         matrix_rows = []
         for col in probe_cols:
-            r = {"Probe": col}
-            r["Dryer Max (°C)"] = round(dryer_df[col].max(), 1) if not dryer_df.empty else np.nan
-            
-            # Dynamic Dryer Threshold Dwells
-            dt1 = cfg.get("dryer_dwell_thresh_1")
-            if dt1 is not None:
-                r[f"Dryer Dwell (≥{int(dt1)}°C)"] = format_dwell_time((dryer_df[col] >= dt1).sum()) if not dryer_df.empty else "00:00:00"
-            
-            dt2 = cfg.get("dryer_dwell_thresh_2")
-            if dt2 is not None:
-                r[f"Dryer Dwell (≥{int(dt2)}°C)"] = format_dwell_time((dryer_df[col] >= dt2).sum()) if not dryer_df.empty else "00:00:00"
-
-            # Debinder Stage Dwell (For NB1)
+            r = {"Probe": col, "Dryer Max (°C)": round(dryer_df[col].max(), 1) if not dryer_df.empty else np.nan}
+            for dt in [cfg.get("dryer_dwell_thresh_1"), cfg.get("dryer_dwell_thresh_2")]:
+                if dt is not None: r[f"Dryer Dwell (≥{int(dt)}°C)"] = format_dwell_time((dryer_df[col] >= dt).sum()) if not dryer_df.empty else "00:00:00"
             if has_debinder and debinder_df is not None:
                 d_thresh = cfg.get("debinder_dwell_thresh", 300.0) or 300.0
                 r["Debinder Max (°C)"] = round(debinder_df[col].max(), 1) if not debinder_df.empty else np.nan
                 r[f"Debinder Dwell (≥{int(d_thresh)}°C)"] = format_dwell_time((debinder_df[col] >= d_thresh).sum()) if not debinder_df.empty else "00:00:00"
-
             r["Brazing Max (°C)"] = round(brazing_df[col].max(), 1) if not brazing_df.empty else np.nan
-            
-            # Dynamic Brazing Threshold Dwells
-            bt1 = cfg.get("brazing_dwell_thresh_1")
-            if bt1 is not None:
-                r[f"Brazing Dwell (≥{int(bt1)}°C)"] = format_dwell_time((brazing_df[col] >= bt1).sum()) if not brazing_df.empty else "00:00:00"
-            
-            bt2 = cfg.get("brazing_dwell_thresh_2")
-            if bt2 is not None:
-                r[f"Brazing Dwell (≥{int(bt2)}°C)"] = format_dwell_time((brazing_df[col] >= bt2).sum()) if not brazing_df.empty else "00:00:00"
-            
-            bt3 = cfg.get("brazing_dwell_thresh_3")
-            if bt3 is not None:
-                r[f"Brazing Dwell (≥{int(bt3)}°C)"] = format_dwell_time((brazing_df[col] >= bt3).sum()) if not brazing_df.empty else "00:00:00"
-
-            bt4 = cfg.get("brazing_dwell_thresh_4")
-            if bt4 is not None:
-                r[f"Brazing Dwell (≥{int(bt4)}°C)"] = format_dwell_time((brazing_df[col] >= bt4).sum()) if not brazing_df.empty else "00:00:00"
-
+            for bt in [cfg.get(f"brazing_dwell_thresh_{i}") for i in range(1, 5)]:
+                if bt is not None: r[f"Brazing Dwell (≥{int(bt)}°C)"] = format_dwell_time((brazing_df[col] >= bt).sum()) if not brazing_df.empty else "00:00:00"
             matrix_rows.append(r)
+        st.dataframe(pd.DataFrame(matrix_rows), use_container_width=True, hide_index=True)
 
-        df_matrix = pd.DataFrame(matrix_rows)
-        st.dataframe(df_matrix, use_container_width=True, hide_index=True)
-
-    # --------------------------------------------------------------------------
-    # TAB 4: STATISTICS & BOXPLOTS
-    # --------------------------------------------------------------------------
     with tabs[3]:
         st.subheader("📈 Temperature Distribution Boxplot by Probe")
-        colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f']
         fig_box = go.Figure()
+        colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f']
         for idx, col in enumerate(probe_cols):
             fig_box.add_trace(go.Box(y=df_m1[col].dropna(), name=col, boxpoints='outliers', marker_color=colors[idx % len(colors)]))
         fig_box.update_layout(title="Temperature Distribution Across Probes", yaxis_title="Temperature (°C)", template="plotly_white", height=500)
@@ -837,38 +565,22 @@ else:
         st.subheader("📊 Zone Temperature Statistics (All Probes Combined)")
         stats_list = []
         for z in zones:
-            z_start, z_end = z["start"], z["start"] + z["length"]
-            df_z = df_m1[(df_m1["Distance_Meters"] >= z_start) & (df_m1["Distance_Meters"] <= z_end)]
+            df_z = df_m1[(df_m1["Distance_Meters"] >= z["start"]) & (df_m1["Distance_Meters"] <= z["start"] + z["length"])]
             if not df_z.empty:
                 z_vals = df_z[probe_cols].values.flatten()
                 z_vals = z_vals[~np.isnan(z_vals)]
                 if len(z_vals) > 0:
-                    stats_list.append({
-                        "Zone #": z["num"], "Zone Name": z["name"], "Group": z["group"],
-                        "Avg Temp (°C)": round(np.mean(z_vals), 2),
-                        "Std Dev (°C)": round(np.std(z_vals, ddof=1), 2),
-                        "Min Temp (°C)": round(np.min(z_vals), 2),
-                        "Max Temp (°C)": round(np.max(z_vals), 2),
-                        "Data Points": len(z_vals)
-                    })
+                    stats_list.append({"Zone #": z["num"], "Zone Name": z["name"], "Group": z["group"], "Avg Temp (°C)": round(np.mean(z_vals), 2), "Std Dev (°C)": round(np.std(z_vals, ddof=1), 2), "Min Temp (°C)": round(np.min(z_vals), 2), "Max Temp (°C)": round(np.max(z_vals), 2), "Data Points": len(z_vals)})
         st.dataframe(pd.DataFrame(stats_list), use_container_width=True, hide_index=True)
 
-    # --------------------------------------------------------------------------
-    # TAB 5: MASTER DATASET & EXPORT
-    # --------------------------------------------------------------------------
     with tabs[4]:
         st.subheader("💾 Unified 1-Row Dataset (Database Ready)")
-        row_data = {
-            "File_Name": data1["filename"], "Furnace_Type": f_variant,
-            "Operator_Name": data1["operator_name"], "Company": data1["company"], "Site": data1["site"],
-            "Entrance_Time": data1["detected_start_hhmmss"], "Line_Speed_MPM": data1["line_speed_mpm"]
-        }
+        row_data = {"File_Name": data1["filename"], "Furnace_Type": f_variant, "Operator_Name": data1["operator_name"], "Company": data1["company"], "Site": data1["site"], "Entrance_Time": data1["detected_start_hhmmss"], "Line_Speed_MPM": data1["line_speed_mpm"]}
         for pb in [f"PB{i}" for i in range(1, 9)]:
             ch = f"PB#{pb.replace('PB','')}"
             row_data[f"{pb}_Location"] = data1["probe_locations"].get(ch, "Unlabeled")
             row_data[f"{pb}_Start_Time"] = data1["probe_start_info"].get(ch, {}).get("Start_HHMMSS", "00:00:00")
             row_data[f"{pb}_Lag_Sec"] = data1["probe_start_info"].get(ch, {}).get("Offset_Sec", 0)
-
         df_single_row = pd.DataFrame([row_data])
         st.dataframe(df_single_row, use_container_width=True)
 
@@ -876,51 +588,21 @@ else:
         with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
             df_single_row.to_excel(writer, sheet_name="Master_Record", index=False)
             df_zone_summary.to_excel(writer, sheet_name="Zone_Peaks", index=False)
-            df_matrix.to_excel(writer, sheet_name="Inspection_Matrix", index=False)
+            pd.DataFrame(matrix_rows).to_excel(writer, sheet_name="Inspection_Matrix", index=False)
+        st.download_button(label="📥 Download Complete Excel Report", data=buffer.getvalue(), file_name=f"{os.path.splitext(data1['filename'])[0]}_Analysis.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-        st.download_button(
-            label="📥 Download Complete Excel Report",
-            data=buffer.getvalue(),
-            file_name=f"{os.path.splitext(data1['filename'])[0]}_Analysis.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
-
-    # --------------------------------------------------------------------------
-    # TAB 6: COMPARE FILES
-    # --------------------------------------------------------------------------
     with tabs[5]:
         st.subheader("⚖️ Compare Profiles Across Two Files")
-        if not uploaded_file2:
-            st.info("👈 Upload a second `.paq` file in the sidebar to view comparison graph.")
+        if not uploaded_file2: st.info("👈 Upload a second `.paq` file in the sidebar to view comparison graph.")
         else:
             data2 = process_paq_file(uploaded_file2.getvalue(), uploaded_file2.name)
-            if not data2:
-                st.error("❌ Failed to parse second `.paq` file.")
+            if not data2: st.error("❌ Failed to parse second `.paq` file.")
             else:
                 df_m2 = data2["df_master"]
                 fig_comp = go.Figure()
-
-                # Add File 1 traces
                 for col in probe_cols:
-                    if col in df_m1.columns:
-                        fig_comp.add_trace(go.Scatter(
-                            x=df_m1["Distance_Meters"], y=df_m1[col], mode="lines",
-                            name=f"F1 ({data1['filename'][:15]}..): {col}",
-                            line=dict(width=1.5)
-                        ))
-
-                # Add File 2 traces
+                    if col in df_m1.columns: fig_comp.add_trace(go.Scatter(x=df_m1["Distance_Meters"], y=df_m1[col], mode="lines", name=f"F1: {col}", line=dict(width=1.5)))
                 for col in data2["probe_cols"]:
-                    if col in df_m2.columns:
-                        fig_comp.add_trace(go.Scatter(
-                            x=df_m2["Distance_Meters"], y=df_m2[col], mode="lines",
-                            name=f"F2 ({data2['filename'][:15]}..): {col}",
-                            line=dict(dash='dash', width=1.5)
-                        ))
-
-                fig_comp.update_layout(
-                    title=f"COMPARISON: {data1['filename']} vs {data2['filename']}",
-                    xaxis_title="Distance (Meters)", yaxis_title="Temperature (°C)",
-                    hovermode="x unified", template="plotly_white", height=600
-                )
+                    if col in df_m2.columns: fig_comp.add_trace(go.Scatter(x=df_m2["Distance_Meters"], y=df_m2[col], mode="lines", name=f"F2: {col}", line=dict(dash='dash', width=1.5)))
+                fig_comp.update_layout(title=f"COMPARISON: {data1['filename']} vs {data2['filename']}", xaxis_title="Distance (Meters)", yaxis_title="Temperature (°C)", hovermode="x unified", template="plotly_white", height=600)
                 st.plotly_chart(fig_comp, use_container_width=True)
