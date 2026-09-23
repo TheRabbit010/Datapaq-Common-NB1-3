@@ -607,7 +607,6 @@ else:
 
         st.markdown("---")
         
-        # Build Inspection Matrix before displaying it
         stages = cfg["stages"]
         has_debinder = any(s["Stage"] == "Debinder" for s in stages)
         dryer_info = next((s for s in stages if s["Stage"] == "Dryer"), stages[0])
@@ -636,7 +635,7 @@ else:
         st.dataframe(pd.DataFrame(matrix_rows), use_container_width=True, hide_index=True)
         st.markdown("---")
         
-        show_indiv_chart = st.toggle("👁️ Show / Hide Individually Aligned Chart", value=True)
+        show_indiv_chart = st.toggle("👁️ Show / Hide Individually Aligned Chart", value=False)
         if show_indiv_chart:
             st.subheader("Individually Aligned Probe Chart (Own 60°C Entry)")
             fig2 = go.Figure()
