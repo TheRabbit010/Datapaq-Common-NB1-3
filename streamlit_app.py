@@ -19,12 +19,12 @@ st.set_page_config(
     layout="wide"
 )
 
-# Group Color Definitions for Plotly Graphs
+# Group Color Definitions for Plotly Graphs (Adjusted for Dark Mode visibility)
 GROUP_COLORS = {
-    "Dryer": "rgba(255, 235, 156, 0.30)",
-    "Debinder": "rgba(255, 199, 119, 0.30)",
-    "Heating": "rgba(255, 160, 160, 0.25)",
-    "Cooling": "rgba(173, 216, 230, 0.30)"
+    "Dryer": "rgba(255, 235, 156, 0.15)",
+    "Debinder": "rgba(255, 199, 119, 0.15)",
+    "Heating": "rgba(255, 160, 160, 0.10)",
+    "Cooling": "rgba(173, 216, 230, 0.15)"
 }
 
 # Furnace Configurations Database (NB1, NB2, NB3 Base Profiles)
@@ -472,6 +472,7 @@ else:
 
     df_m1, f_variant, cfg, zones, probe_cols = data1["df_master"], data1["furnace_variant"], data1["cfg"], data1["cfg"]["zones"], data1["probe_cols"]
 
+    # Calculate actual "Time in Furnace" based on line speed and physical length
     total_furnace_length = zones[-1]["start"] + zones[-1]["length"]
     furnace_duration_mins = total_furnace_length / data1['line_speed_mpm']
     furnace_duration_secs = int(furnace_duration_mins * 60)
@@ -495,6 +496,8 @@ else:
             z_color = GROUP_COLORS.get(z["group"], "rgba(200, 200, 200, 0.2)")
             fig1.add_vrect(x0=z["start"], x1=z["start"] + z["length"], fillcolor=z_color, layer="below", line_width=0.5, line_dash="dot", line_color="rgba(120, 120, 120, 0.4)", annotation_text=f"{z['num']}.{z['name']}", annotation_position="top left", annotation=dict(font_size=9, font_color="#222222", textangle=-90))
         fig1.add_hline(y=cfg["trigger_temp_brazing"], line_dash="dash", line_color="red", annotation_text=f"Brazing ({cfg['trigger_temp_brazing']}°C)", annotation_position="bottom right")
+        
+        # Limit X-Axis to end right after the furnace length
         fig1.update_layout(title=f"GLOBAL FURNACE PROFILE ({f_variant}): {data1['filename']}", xaxis=dict(title="Furnace Distance (Meters from Entrance)", range=[-1, total_furnace_length + 2]), yaxis_title="Temperature (°C)", hovermode="x unified", template="plotly_white", height=550)
         st.plotly_chart(fig1, use_container_width=True)
 
@@ -508,6 +511,8 @@ else:
         for z in zones:
             z_color = GROUP_COLORS.get(z["group"], "rgba(200, 200, 200, 0.2)")
             fig2.add_vrect(x0=z["start"], x1=z["start"] + z["length"], fillcolor=z_color, layer="below", line_width=0.5, line_dash="dot", line_color="rgba(120, 120, 120, 0.4)", annotation_text=f"{z['num']}.{z['name']}", annotation_position="top left", annotation=dict(font_size=9, font_color="#222222", textangle=-90))
+        
+        # Limit X-Axis to end right after the furnace length
         fig2.update_layout(title=f"INDIVIDUALLY ALIGNED PROFILES ({f_variant}): {data1['filename']}", xaxis=dict(title="Individual Probe Distance (Meters from Probe's 60°C Entry)", range=[-1, total_furnace_length + 2]), yaxis_title="Temperature (°C)", hovermode="x unified", template="plotly_white", height=550)
         st.plotly_chart(fig2, use_container_width=True)
 
@@ -590,7 +595,7 @@ else:
         colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f']
         for idx, col in enumerate(probe_cols):
             fig_box.add_trace(go.Box(y=df_m1[col].dropna(), name=col, boxpoints='outliers', marker_color=colors[idx % len(colors)]))
-        fig_box.update_layout(title="Temperature Distribution Across Probes", yaxis_title="Temperature (°C)", template="plotly_white", height=500)
+        fig_box.update_layout(title="Temperature Distribution Across Probes", yaxis_title="Temperature (°C)", template="plotly_dark", height=500)
         st.plotly_chart(fig_box, use_container_width=True)
 
         st.markdown("---")
@@ -637,5 +642,6 @@ else:
                 for col in data2["probe_cols"]:
                     if col in df_m2.columns: fig_comp.add_trace(go.Scatter(x=df_m2["Distance_Meters"], y=df_m2[col], mode="lines", name=f"F2: {col}", line=dict(dash='dash', width=1.5)))
                 
+                # Limit X-Axis on comparison chart as well
                 fig_comp.update_layout(title=f"COMPARISON: {data1['filename']} vs {data2['filename']}", xaxis=dict(title="Distance (Meters)", range=[-1, total_furnace_length + 2]), yaxis_title="Temperature (°C)", hovermode="x unified", template="plotly_white", height=600)
                 st.plotly_chart(fig_comp, use_container_width=True)
