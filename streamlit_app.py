@@ -330,7 +330,6 @@ def process_paq_file(file_bytes, filename):
     # Map Probes
     probe_locations = {}
     
-    # Pass 1: Assign Explicitly Numbered Probes (e.g. #1 (°C))
     for p in found_probes:
         m = re.search(r'^#?([1-8])\s*[\(°C\)]*\s*[-:]?\s*(.+)', p)
         if m:
@@ -341,7 +340,6 @@ def process_paq_file(file_bytes, filename):
             if ch_key not in probe_locations or len(label) > len(probe_locations[ch_key]):
                 probe_locations[ch_key] = label
                 
-    # Pass 2: Assign Sequential Probes (Missing explicit numbers)
     unassigned_probes = [p for p in found_probes if not re.search(r'^#?[1-8]\s*[\(°C\)]', p)]
     assigned_idx = 1
     for p in unassigned_probes:
@@ -355,7 +353,6 @@ def process_paq_file(file_bytes, filename):
         if col not in probe_locations:
             probe_locations[col] = f"Channel {col.replace('PB#', '')} (Unlabeled)"
 
-    # Finalize Metadata text
     operator_name, company, site, clean_comments_text = parse_operator_and_metadata(found_comments)
     process_settings = "\n".join(found_recipes) if found_recipes else "Standard Recipe Parameters"
 
@@ -454,12 +451,17 @@ else:
 
     df_m1, f_variant, cfg, zones, probe_cols = data1["df_master"], data1["furnace_variant"], data1["cfg"], data1["cfg"]["zones"], data1["probe_cols"]
 
+    # Calculate actual "Time in Furnace" based on line speed and physical length
+    total_furnace_length = zones[-1]["start"] + zones[-1]["length"]
+    furnace_duration_mins = total_furnace_length / data1['line_speed_mpm']
+    furnace_duration_secs = int(furnace_duration_mins * 60)
+
     st.success(f"✓ File Loaded Successfully: **{data1['filename']}**")
     m_col1, m_col2, m_col3, m_col4 = st.columns(4)
     m_col1.metric("Confirmed Furnace", f_variant)
     m_col2.metric("Conveyor Speed", f"{data1['line_speed_mpm']:.3f} m/min")
     m_col3.metric("Lead Probe Entrance", f"{data1['first_probe_name']} @ {data1['detected_start_hhmmss']}")
-    m_col4.metric("Total Duration", f"{len(df_m1)}s (~{len(df_m1)/60:.1f} min)")
+    m_col4.metric("Time in Furnace", f"{furnace_duration_secs}s (~{furnace_duration_mins:.1f} min)")
 
     tabs = st.tabs(["📊 Profile Graphs", "📝 Metadata & Probe Map", "🏭 Zone & Stage Summary", "📈 Statistics & Boxplots", "💾 Master Dataset & Export", "⚖️ Compare Files"])
 
@@ -473,7 +475,9 @@ else:
             z_color = GROUP_COLORS.get(z["group"], "rgba(200, 200, 200, 0.2)")
             fig1.add_vrect(x0=z["start"], x1=z["start"] + z["length"], fillcolor=z_color, layer="below", line_width=0.5, line_dash="dot", line_color="rgba(120, 120, 120, 0.4)", annotation_text=f"{z['num']}.{z['name']}", annotation_position="top left", annotation=dict(font_size=9, font_color="#222222", textangle=-90))
         fig1.add_hline(y=cfg["trigger_temp_brazing"], line_dash="dash", line_color="red", annotation_text=f"Brazing ({cfg['trigger_temp_brazing']}°C)", annotation_position="bottom right")
-        fig1.update_layout(title=f"GLOBAL FURNACE PROFILE ({f_variant}): {data1['filename']}", xaxis_title="Furnace Distance (Meters from Entrance)", yaxis_title="Temperature (°C)", hovermode="x unified", template="plotly_white", height=550)
+        
+        # Limit X-Axis to end right after the furnace length
+        fig1.update_layout(title=f"GLOBAL FURNACE PROFILE ({f_variant}): {data1['filename']}", xaxis=dict(title="Furnace Distance (Meters from Entrance)", range=[-1, total_furnace_length + 2]), yaxis_title="Temperature (°C)", hovermode="x unified", template="plotly_white", height=550)
         st.plotly_chart(fig1, use_container_width=True)
 
         st.markdown("---")
@@ -486,7 +490,9 @@ else:
         for z in zones:
             z_color = GROUP_COLORS.get(z["group"], "rgba(200, 200, 200, 0.2)")
             fig2.add_vrect(x0=z["start"], x1=z["start"] + z["length"], fillcolor=z_color, layer="below", line_width=0.5, line_dash="dot", line_color="rgba(120, 120, 120, 0.4)", annotation_text=f"{z['num']}.{z['name']}", annotation_position="top left", annotation=dict(font_size=9, font_color="#222222", textangle=-90))
-        fig2.update_layout(title=f"INDIVIDUALLY ALIGNED PROFILES ({f_variant}): {data1['filename']}", xaxis_title="Individual Probe Distance (Meters from Probe's 60°C Entry)", yaxis_title="Temperature (°C)", hovermode="x unified", template="plotly_white", height=550)
+        
+        # Limit X-Axis to end right after the furnace length
+        fig2.update_layout(title=f"INDIVIDUALLY ALIGNED PROFILES ({f_variant}): {data1['filename']}", xaxis=dict(title="Individual Probe Distance (Meters from Probe's 60°C Entry)", range=[-1, total_furnace_length + 2]), yaxis_title="Temperature (°C)", hovermode="x unified", template="plotly_white", height=550)
         st.plotly_chart(fig2, use_container_width=True)
 
     with tabs[1]:
@@ -497,7 +503,7 @@ else:
             m1.text_input("👤 Operator Name", data1["operator_name"], disabled=True)
             m2.text_input("🏢 Company", data1["company"], disabled=True)
             m3.text_input("📍 Site", data1["site"], disabled=True)
-            st.text_area("💬 Additional Comments / Notes", data1["operator_comment"], height=160)
+            st.text_area("💬 Additional Comments / Notes", data1["operator_comment"], height=200)
             st.text_area("⚙️ Recipe / Process Settings", data1["process_settings"], height=200)
 
         with col_b:
@@ -614,5 +620,7 @@ else:
                     if col in df_m1.columns: fig_comp.add_trace(go.Scatter(x=df_m1["Distance_Meters"], y=df_m1[col], mode="lines", name=f"F1: {col}", line=dict(width=1.5)))
                 for col in data2["probe_cols"]:
                     if col in df_m2.columns: fig_comp.add_trace(go.Scatter(x=df_m2["Distance_Meters"], y=df_m2[col], mode="lines", name=f"F2: {col}", line=dict(dash='dash', width=1.5)))
-                fig_comp.update_layout(title=f"COMPARISON: {data1['filename']} vs {data2['filename']}", xaxis_title="Distance (Meters)", yaxis_title="Temperature (°C)", hovermode="x unified", template="plotly_white", height=600)
+                
+                # Limit X-Axis on comparison chart as well
+                fig_comp.update_layout(title=f"COMPARISON: {data1['filename']} vs {data2['filename']}", xaxis=dict(title="Distance (Meters)", range=[-1, total_furnace_length + 2]), yaxis_title="Temperature (°C)", hovermode="x unified", template="plotly_white", height=600)
                 st.plotly_chart(fig_comp, use_container_width=True)
