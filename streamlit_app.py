@@ -204,9 +204,9 @@ def clean_paq_text(raw_text):
         p = re.sub(r'^[>#;\.,\|]+', '', p).strip() 
         if len(p) < 3: continue
         
-        # Stop completely if we hit the start of the binary gibberish block
-        if re.search(r'\b(Untitled NB(?:\#\d)? Entry|0Hl !@f|aaa\.\.\.)\b', p, re.IGNORECASE):
-            clean_segment = re.split(r'\b(Untitled NB(?:\#\d)? Entry|0Hl !@f|aaa\.\.\.)\b', p, flags=re.IGNORECASE)[0]
+        # Stop completely if we hit the start of the binary gibberish block / system tags
+        if re.search(r'\b(Untitled|Entry Zone|XFER|WatCool|Exit curtain|AirCool|Exit Zone|Dryer#1|0Hl !@f|aaa\.\.\.)\b', p, re.IGNORECASE):
+            clean_segment = re.split(r'\b(Untitled|Entry Zone|XFER|WatCool|Exit curtain|AirCool|Exit Zone|Dryer#1|0Hl !@f|aaa\.\.\.)\b', p, flags=re.IGNORECASE)[0]
             if clean_segment.strip():
                 cleaned_parts.append(clean_segment.strip())
             break # Stop processing this chunk entirely
@@ -215,9 +215,6 @@ def clean_paq_text(raw_text):
         if re.search(r'(.)\1{3,}', p): continue 
         if re.search(r'[@^\$|~<>{}\[\]]{2,}', p): continue 
         if re.search(r'^[0-9\W]+$', p): continue 
-        
-        # Remove specific zone headers
-        p = re.sub(r'\b(Untitled NB#\d Entry Zone|XFER|WatCool#\d|Exit curtain|AA\d+-\d+|AirCool#\d|Exit Dryer#\d|Exit Zone|Dryer#\d)\b', '', p, flags=re.IGNORECASE)
         
         p = re.sub(r'#\d+', '', p)
         p = re.sub(r'\s+', ' ', p).strip()
