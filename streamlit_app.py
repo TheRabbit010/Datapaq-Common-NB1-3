@@ -660,7 +660,6 @@ else:
         st.plotly_chart(fig1, use_container_width=True)
         st.markdown("---")
         
-        # Build Inspection Matrix before displaying it
         stages = cfg["stages"]
         has_debinder = any(s["Stage"] == "Debinder" for s in stages)
         dryer_info = next((s for s in stages if s["Stage"] == "Dryer"), stages[0])
@@ -687,7 +686,6 @@ else:
             
         st.subheader(f"⏱️ Inspection Matrix — {f_variant}")
         
-        # Display Standards Banner
         std_info = STANDARD_SPECS.get(f_variant)
         if std_info:
             st.markdown(f"""
@@ -701,8 +699,9 @@ else:
             """, unsafe_allow_html=True)
             
         df_matrix = pd.DataFrame(matrix_rows)
-        # Apply conditional formatting for easy visual inspection & copy-pasting
-        st.dataframe(df_matrix.style.apply(style_inspection_matrix, variant=f_variant, axis=1), use_container_width=True, hide_index=True)
+        # Format Max Temp columns to 1 decimal place before styling
+        format_dict = {col: "{:.1f}" for col in df_matrix.columns if "Max (°C)" in col}
+        st.dataframe(df_matrix.style.apply(style_inspection_matrix, variant=f_variant, axis=1).format(format_dict, na_rep="N/A"), use_container_width=True, hide_index=True)
         st.markdown("---")
         
         col_a, col_b = st.columns(2)
@@ -761,7 +760,6 @@ else:
 
         df_zone_summary = pd.DataFrame(zone_max_records)
         try:
-            # Explicitly format numerical columns to 2 decimal places
             st.dataframe(df_zone_summary.style.background_gradient(cmap="OrRd", subset=probe_cols + ["Zone Peak (°C)"]).format({col: "{:.2f}" for col in probe_cols + ["Zone Peak (°C)"]}), use_container_width=True)
         except Exception: 
             st.dataframe(df_zone_summary, use_container_width=True)
