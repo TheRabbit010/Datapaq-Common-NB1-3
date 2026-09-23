@@ -39,6 +39,7 @@ div.stButton > button:first-child {
     font-weight: bold;
     border-radius: 5px;
     width: 100%;
+    margin-bottom: 20px;
 }
 div.stButton > button:first-child:hover {
     background-color: #ff3333;
@@ -208,6 +209,7 @@ def format_dwell_time(total_seconds):
     return f"{int(h):02d}:{int(m):02d}:{int(s):02d}"
 
 def clean_paq_text(raw_text):
+    """Strips binary C++ class identifiers, network addresses, and cuts off at binary garbage blocks."""
     if not raw_text: return ""
     text = re.split(r'\\\\', raw_text)[0]
     
@@ -219,6 +221,7 @@ def clean_paq_text(raw_text):
         p = re.sub(r'^[>#;\.,\|]+', '', p).strip() 
         if len(p) < 3: continue
         
+        # AGGRESSIVE TRUNCATION: Stop immediately if hitting a system zone tag or binary chunk
         if re.search(r'\b(Untitled|Entry Zone|XFER|WatCool|Exit curtain|AirCool|Exit Zone|Dryer#1|VSTS Exit Dryer|Exit Dryer|0Hl|!@f|"onB|aaa\.\.\.|FFGCC|bbbRRR|LNNSQ|OD@)\b', p, re.IGNORECASE):
             clean_segment = re.split(r'\b(Untitled|Entry Zone|XFER|WatCool|Exit curtain|AirCool|Exit Zone|Dryer#1|VSTS Exit Dryer|Exit Dryer|0Hl|!@f|"onB|aaa\.\.\.|FFGCC|bbbRRR|LNNSQ|OD@)\b', p, flags=re.IGNORECASE)[0]
             if clean_segment.strip():
@@ -238,22 +241,26 @@ def clean_paq_text(raw_text):
     return " ".join(cleaned_parts)
 
 def parse_operator_and_metadata(comments_list):
+    """Extract Operator, Company, Site, Clean Comments and Process Notes"""
     combined = " ".join(comments_list)
     op, comp, site = "N/A", "N/A", "N/A"
     
     m_site = re.search(r'(Power\s+Chonburi|Chonburi|Plant\s+\d+|Factory\s+\d+)', combined, re.IGNORECASE)
     if m_site: site = m_site.group(1).strip()
     
+    # Prioritize VSTS over Datapaq
     m_comp = re.search(r'\b(VSTS)\b', combined, re.IGNORECASE)
     if not m_comp: m_comp = re.search(r'\b(Datapaq)\b', combined, re.IGNORECASE)
     if m_comp: comp = m_comp.group(1).strip()
     
+    # Extract Operator (handle cases like CAlarm Sunisa/Niwat)
     combined_clean_start = re.sub(r'^\s*CAlarm\s*', '', combined, flags=re.IGNORECASE)
     m_op = re.search(r'^([A-Za-z/]+)\s+(?:Monthly|WK|date|product|validation|run|test)', combined_clean_start, re.IGNORECASE)
     if m_op: op = m_op.group(1).strip()
     elif "Niwat" in combined_clean_start: op = "Niwat"
     elif "Sunisa" in combined_clean_start: op = "Sunisa"
 
+    # Aggressive cut for comments box
     chopped_comment = re.split(r'\b(Untitled|Entry Zone|VSTS Exit Dryer|Exit Dryer|0Hl|!@f|"onB|aaa\.\.\.|FFGCC|bbbRRR|LNNSQ|OD@)\b', combined_clean_start, flags=re.IGNORECASE)[0]
     
     clean_notes = chopped_comment
@@ -262,14 +269,17 @@ def parse_operator_and_metadata(comments_list):
             clean_notes = re.sub(rf'^\s*{re.escape(token)}\b\s*', '', clean_notes, flags=re.IGNORECASE)
             clean_notes = re.sub(rf'\s+\b{re.escape(token)}\b\s+', ' ', clean_notes, flags=re.IGNORECASE)
 
+    # Truncate leaked probe locations from the comment
     split_match = re.search(r'(.*?)(?:\s+)?\b([A-Za-z]?Middle\s+left|[A-Za-z]?Middle\s+right|[A-Za-z]?Left\s+core|[A-Za-z]?Right\s+core|Bottom cooler|Top cooler)\b', clean_notes, flags=re.IGNORECASE)
     if split_match:
         clean_notes = split_match.group(1).strip()
         
     clean_notes = re.sub(r'[\.,\s]+$', '.', clean_notes).strip()
+
     return op, comp, site, clean_notes if clean_notes else "N/A"
 
 def clean_probe_location(loc_desc):
+    # Remove rogue single uppercase letters preceding keywords (e.g. BLeft -> Left, JMiddle -> Middle)
     return re.sub(r'\b[A-Z](Left|Right|Middle|Bottom|Top)\b', r'\1', loc_desc, flags=re.IGNORECASE)
 
 @st.cache_data
@@ -277,6 +287,7 @@ def process_paq_file(file_bytes, filename):
     ole_bytes = io.BytesIO(file_bytes)
     ole = olefile.OleFileIO(ole_bytes)
 
+    # 1. Probe Streams Processing
     probe_streams = [s for s in ole.listdir() if len(s) >= 4 and s[0] == 'Paqfiles' and s[2] == 'ProbeResults']
     probe_streams = sorted(probe_streams, key=lambda x: x[-1])
 
@@ -301,6 +312,7 @@ def process_paq_file(file_bytes, filename):
 
     probe_cols = [col for col in df_master.columns if col.startswith("PB#")]
 
+    # 2. Entrance Detection
     SUSTAINED_SECONDS = 15
     probe_start_secs = {}
     for col in probe_cols:
@@ -315,6 +327,7 @@ def process_paq_file(file_bytes, filename):
     first_probe_name = [k for k, v in probe_start_secs.items() if v == detected_start_sec][0] if valid_starts else probe_cols[0]
     detected_start_hhmmss = df_master[df_master["Time_Seconds"] == detected_start_sec].iloc[0]["Time_HHMMSS"]
 
+    # 3. Stream Scanning Loop for Metadata, Recipe, Image, and Probe Locations
     raw_texts = []
     embedded_img = None
 
@@ -329,6 +342,7 @@ def process_paq_file(file_bytes, filename):
                     try: data_b = zlib.decompress(raw_b[8:] if raw_b.startswith(b'ZLIB') else raw_b, -zlib.MAX_WBITS)
                     except Exception: pass
 
+            # Extract Image
             if embedded_img is None and len(data_b) > 500:
                 for header in [b'\x89PNG\r\n\x1a\n', b'\xff\xd8\xff', b'BM']:
                     idx = data_b.find(header)
@@ -338,6 +352,7 @@ def process_paq_file(file_bytes, filename):
                             break
                         except Exception: pass
 
+            # Extract ASCII Strings
             ascii_matches = re.findall(rb'[\x20-\x7E]{4,}', data_b)
             for m in ascii_matches:
                 raw_texts.append(m.decode('ascii', errors='ignore').strip())
@@ -500,7 +515,7 @@ with st.sidebar:
     
     if st.button("🔄 Reset / Clear Data"):
         st.cache_data.clear()
-        st.experimental_rerun()
+        st.rerun()
         
     uploaded_file1 = st.file_uploader("Upload Main .PAQ File", type=["paq"], key="paq1")
     st.markdown("---")
