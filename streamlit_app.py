@@ -143,7 +143,7 @@ FURNACE_CONFIGS = {
 }
 
 # ==============================================================================
-# HELPER FUNCTIONS FOR PAQ PARSING
+# HELPER FUNCTIONS FOR PAQ CLEANING & PARSING
 # ==============================================================================
 def decompress_stream(ole_obj, stream_name):
     try:
@@ -194,6 +194,63 @@ def format_dwell_time(total_seconds):
     m, s = divmod(total_seconds, 60)
     h, m = divmod(m, 60)
     return f"{int(h):02d}:{int(m):02d}:{int(s):02d}"
+
+def clean_paq_text(raw_text):
+    """Strips binary C++ class identifiers and junk symbols."""
+    if not raw_text:
+        return ""
+    tags_to_remove = [
+        r'\bCAxisCustomUnits\b', r'\bCPaqfile\b', r'\bCByteDataArray\b',
+        r'\bCProbeResult\b', r'\bCFurnaceRecipe\b', r'\bCZoom\b', 
+        r'\bCProbeMapEntry\b', r'\bcho1-sv\b', r'33333+', r'ffff+'
+    ]
+    text = raw_text
+    for tag in tags_to_remove:
+        text = re.sub(tag, '', text, flags=re.IGNORECASE)
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text
+
+def parse_operator_and_metadata(raw_comments_list):
+    """Extracts Operator Name, Company, Site, and Clean Notes."""
+    combined = " ".join(raw_comments_list)
+    
+    operator_name = "N/A"
+    company = "N/A"
+    site = "N/A"
+    
+    # 1. Operator Name: e.g. "CPaqfile Sunisa" -> "Sunisa" or "Operator: Sunisa"
+    m_op = re.search(r'CPaqfile\s+([A-Za-z0-9_\-\.]+)', combined)
+    if not m_op:
+        m_op = re.search(r'(?:Operator|User)[:\s]+([A-Za-z0-9_\-\.]+)', combined, re.IGNORECASE)
+    if m_op:
+        operator_name = m_op.group(1).strip()
+        
+    # 2. Company Name: e.g. "VSTS" or "Company: VSTS"
+    m_comp = re.search(r'\b(VSTS|Datapaq)\b', combined, re.IGNORECASE)
+    if not m_comp:
+        m_comp = re.search(r'Company[:\s]+([A-Za-z0-9_\-\.]+)', combined, re.IGNORECASE)
+    if m_comp:
+        company = m_comp.group(1 if m_comp.lastindex >= 1 else 0).strip()
+        
+    # 3. Site Name: e.g. "Power Chonburi" or "Chonburi"
+    m_site = re.search(r'(Power\s+Chonburi|Chonburi|Plant\s+\d+|Factory\s+\d+)', combined, re.IGNORECASE)
+    if not m_site:
+        m_site = re.search(r'Site[:\s]+([A-Za-z0-9\s_\-\.]+)', combined, re.IGNORECASE)
+    if m_site:
+        site = m_site.group(0).strip()
+        
+    # Clean full text for general comments box
+    clean_text = clean_paq_text(combined)
+    
+    # Strip out operator/company/site tokens from additional comments if already extracted
+    for token in [operator_name, company, site]:
+        if token != "N/A":
+            clean_text = re.sub(rf'\b{re.escape(token)}\b', '', clean_text, flags=re.IGNORECASE)
+            
+    clean_text = re.sub(r'#\d+', '', clean_text)  # Strip binary ID numbers like #24275
+    clean_text = re.sub(r'\s+', ' ', clean_text).strip()
+    
+    return operator_name, company, site, clean_text if clean_text else "N/A"
 
 @st.cache_data
 def process_paq_file(file_bytes, filename):
@@ -249,7 +306,7 @@ def process_paq_file(file_bytes, filename):
     start_row = df_master[df_master["Time_Seconds"] == detected_start_sec].iloc[0]
     detected_start_hhmmss = start_row["Time_HHMMSS"]
 
-    # 3. Enhanced Metadata, Comments, Recipe & Embedded Image Extraction
+    # 3. Metadata, Comments & Embedded Image Extraction
     found_comments, found_settings = [], []
     embedded_img = None
 
@@ -282,14 +339,12 @@ def process_paq_file(file_bytes, filename):
                         except Exception:
                             pass
 
-            # Extract ASCII Strings and Clean Binary Artifacts
-            ascii_matches = re.findall(rb'[\x20-\x7E]{4,}', data_b)
+            # Extract ASCII Strings
+            ascii_matches = re.findall(rb'[\x20-\x7E]{3,}', data_b)
             clean_strings = []
             for m in ascii_matches:
                 s = m.decode('ascii', errors='ignore').strip()
-                # Clean binary class noise and truncation markers
-                s = re.split(r'33333|ffff|ffffff|\b[A-Za-z]@|CProbeResult|CFurnaceRecipe|CZoom|CProbeMapEntry|cho1-sv', s)[0].strip()
-                if len(s) >= 3 and not s.startswith("CProbe") and not s.startswith("CFurnace") and not s.startswith("Paqfile"):
+                if len(s) >= 3 and not s.startswith("Paqfile") and not s.startswith("ProbeResults"):
                     clean_strings.append(s)
 
             full_text = " ".join(clean_strings)
@@ -298,88 +353,94 @@ def process_paq_file(file_bytes, filename):
 
             # Extract Comments / Operator Notes
             if any(k in s_name.lower() for k in ["comment", "notes", "header", "paqfile0"]):
-                # Filter out pure system path strings
-                if len(full_text) >= 3 and not full_text.startswith("ProbeResults"):
+                if len(full_text) >= 3:
                     found_comments.append(full_text)
 
             # Extract Recipe & Process Settings
             if any(k in s_name.lower() for k in ["setting", "recipe", "process", "furnace"]):
-                if len(full_text) >= 5:
-                    found_settings.append(full_text)
+                clean_rec = clean_paq_text(full_text)
+                if len(clean_rec) >= 5:
+                    found_settings.append(clean_rec)
 
         except Exception:
             continue
 
-    operator_comment = "\n".join(dict.fromkeys(found_comments[:5])) if found_comments else "Not Specified in File Header"
+    # Parse Operator Metadata
+    operator_name, company, site, clean_comments_text = parse_operator_and_metadata(found_comments)
     process_settings = "\n".join(dict.fromkeys(found_settings[:5])) if found_settings else "Standard Recipe Parameters"
 
     # 4. Thermocouple Probe Locations Extraction
     probe_locations = {}
 
-    # Step A: Scan dedicated 'ProbeMap' streams
+    # Method A: Scan for explicit #1..#8 or PB#1..PB#8 channel prefixes across all streams
     for stream_path in ole.listdir():
-        s_name = "/".join(stream_path)
-        if "probemap" in s_name.lower() or "probelocation" in s_name.lower():
-            try:
-                raw_b = ole.openstream(stream_path).read()
-                data_b = raw_b[8:] if raw_b.startswith(b'ZLIB') else raw_b
-                try: decomp = zlib.decompress(data_b)
-                except Exception:
-                    try: decomp = zlib.decompress(data_b, -zlib.MAX_WBITS)
-                    except Exception: decomp = raw_b
-
-                ascii_matches = re.findall(rb'[\x20-\x7E]{3,}', decomp)
-                clean_list = []
-                for m in ascii_matches:
-                    s = m.decode('ascii', errors='ignore').strip()
-                    s = re.split(r'33333|ffff|ffffff|CProbe|CFurnace|CZoom|cho1-sv', s)[0].strip()
-                    if len(s) >= 3 and not s.startswith("Paqfile") and not s.startswith("ProbeResults"):
-                        clean_list.append(s)
-
-                if clean_list:
-                    for idx, loc_str in enumerate(clean_list[:len(probe_cols)]):
-                        ch_key = f"PB#{idx+1}"
-                        if ch_key in probe_cols and ch_key not in probe_locations:
-                            probe_locations[ch_key] = loc_str
+        try:
+            raw_b = ole.openstream(stream_path).read()
+            if not raw_b: continue
+            data_b = raw_b[8:] if raw_b.startswith(b'ZLIB') else raw_b
+            try: decomp = zlib.decompress(data_b)
             except Exception:
-                pass
-
-    # Step B: Fallback regex search for 'Probe X:' patterns across all streams
-    if len(probe_locations) < len(probe_cols):
-        for stream_path in ole.listdir():
-            try:
-                raw_b = ole.openstream(stream_path).read()
-                data_b = raw_b[8:] if raw_b.startswith(b'ZLIB') else raw_b
-                try: decomp = zlib.decompress(data_b)
+                try: decomp = zlib.decompress(data_b, -zlib.MAX_WBITS)
                 except Exception: decomp = raw_b
 
-                ascii_matches = re.findall(rb'[\x20-\x7E]{3,}', decomp)
-                for m in ascii_matches:
-                    s = m.decode('ascii', errors='ignore').strip()
-                    s = re.split(r'33333|ffff|CProbe|CFurnace', s)[0].strip()
-                    for col in probe_cols:
-                        p_num = col.replace("PB#", "")
-                        match = re.search(rf'Probe\s*{p_num}[:\s\-_]+([A-Za-z0-9\s/_\-\.\(\)]+)', s, re.IGNORECASE)
-                        if match and col not in probe_locations:
-                            loc_val = match.group(1).strip()
-                            if len(loc_val) >= 2:
-                                probe_locations[col] = loc_val
-            except Exception:
-                pass
+            ascii_strings = re.findall(rb'[\x20-\x7E]{4,}', decomp)
+            for m in ascii_strings:
+                s_raw = m.decode('ascii', errors='ignore').strip()
+                s_clean = clean_paq_text(s_raw)
 
-    # Step C: Complete any missing probe entries so PB#1 to PB#8 ALL exist in UI table
+                # Pattern matching: "#1 (°C) Bottom cooler..." or "PB#1..." or "1: ..."
+                m_num = re.search(r'#?([1-8])\s*[\(°C\)]*\s*([A-Za-z0-9\s/_\-\.&,\(\)]+)', s_clean)
+                if m_num:
+                    ch_idx = int(m_num.group(1))
+                    ch_key = f"PB#{ch_idx}"
+                    loc_desc = m_num.group(2).strip()
+
+                    if len(loc_desc) >= 3 and ch_key in probe_cols:
+                        formatted_label = f"#{ch_idx} (°C) {loc_desc}" if not loc_desc.startswith("#") else loc_desc
+                        if ch_key not in probe_locations or len(formatted_label) > len(probe_locations[ch_key]):
+                            probe_locations[ch_key] = formatted_label
+
+        except Exception:
+            continue
+
+    # Method B: Scan ProbeMap stream for sequential probe descriptions
+    if len(probe_locations) < len(probe_cols):
+        for stream_path in ole.listdir():
+            s_name = "/".join(stream_path)
+            if "probemap" in s_name.lower() or "probelocation" in s_name.lower():
+                try:
+                    raw_b = ole.openstream(stream_path).read()
+                    data_b = raw_b[8:] if raw_b.startswith(b'ZLIB') else raw_b
+                    try: decomp = zlib.decompress(data_b)
+                    except Exception: decomp = raw_b
+
+                    ascii_strings = re.findall(rb'[\x20-\x7E]{4,}', decomp)
+                    valid_descs = []
+                    for m in ascii_strings:
+                        s_clean = clean_paq_text(m.decode('ascii', errors='ignore'))
+                        if len(s_clean) >= 4 and not s_clean.startswith("Paqfile") and not s_clean.startswith("ProbeResult"):
+                            valid_descs.append(s_clean)
+
+                    if len(valid_descs) >= len(probe_cols):
+                        for idx, desc in enumerate(valid_descs[:len(probe_cols)]):
+                            ch_key = f"PB#{idx+1}"
+                            if ch_key not in probe_locations or "Unlabeled" in probe_locations[ch_key]:
+                                probe_locations[ch_key] = f"#{idx+1} (°C) {desc}"
+                except Exception:
+                    pass
+
+    # Ensure all PB#1..PB#8 channels are populated
     for col in probe_cols:
         if col not in probe_locations or not probe_locations[col]:
             probe_locations[col] = f"Channel {col.replace('PB#', '')} (Unlabeled)"
 
     # 5. STRICT PRIORITY AUTOMATIC FURNACE SELECTION LOGIC
-    recipe_corpus = f"{process_settings} {operator_comment} {filename}"
+    recipe_corpus = f"{process_settings} {clean_comments_text} {filename}"
 
     furnace_id = "NB3"  # Default fallback
     furnace_variant = "NB3"
 
     # PRIORITY 1: Check explicit NB3 Model Keywords FIRST (BTM, KE8, M2, EVO)
-    # This prevents filenames starting with 'WK36 BTM...' from being wrongly hijacked by NB1 WKxx rule!
     if re.search(r'\b(KE8|M2|EVO|BTM)\b', recipe_corpus, re.IGNORECASE):
         furnace_id = "NB3"
         if re.search(r'\bBTM\b', recipe_corpus, re.IGNORECASE):
@@ -401,7 +462,6 @@ def process_paq_file(file_bytes, filename):
             furnace_variant = "NB1 (CDS/KN9/12SHP)"
 
     # PRIORITY 4: Check generic NB1 Week/Date patterns (WKxx, YYMMDD)
-    # ONLY executed if no explicit model keywords (BTM, M2, Tahc, etc.) matched above!
     elif (re.search(r'\bWK\d{1,2}\b', recipe_corpus, re.IGNORECASE) or 
           re.search(r'\b\d{6}\b', recipe_corpus)):
         furnace_id = "NB1"
@@ -429,7 +489,7 @@ def process_paq_file(file_bytes, filename):
         cfg["brazing_dwell_thresh_4"] = 600.0
         cfg["trigger_temp_brazing"] = 577.0
 
-    elif "NB1" in furnace_variant:  # YYMMDD, WKxx, CDS, KN9, 12SHP
+    elif "NB1" in furnace_variant:
         cfg["dryer_dwell_thresh_1"] = 150.0
         cfg["dryer_dwell_thresh_2"] = 200.0
         cfg["debinder_dwell_thresh"] = 300.0
@@ -439,7 +499,7 @@ def process_paq_file(file_bytes, filename):
         cfg["brazing_dwell_thresh_4"] = 600.0
         cfg["trigger_temp_brazing"] = 577.0
 
-    elif "NB2" in furnace_variant:  # Tahc, Utahc
+    elif "NB2" in furnace_variant:
         cfg["dryer_dwell_thresh_1"] = 200.0
         cfg["dryer_dwell_thresh_2"] = 250.0
         cfg["debinder_dwell_thresh"] = None
@@ -449,7 +509,7 @@ def process_paq_file(file_bytes, filename):
         cfg["brazing_dwell_thresh_4"] = 600.0
         cfg["trigger_temp_brazing"] = 577.0
 
-    elif "BTM" in furnace_variant:  # NB3 BTM
+    elif "BTM" in furnace_variant:
         cfg["dryer_dwell_thresh_1"] = 250.0
         cfg["dryer_dwell_thresh_2"] = 300.0
         cfg["debinder_dwell_thresh"] = None
@@ -459,7 +519,7 @@ def process_paq_file(file_bytes, filename):
         cfg["brazing_dwell_thresh_4"] = 600.0
         cfg["trigger_temp_brazing"] = 577.0
 
-    elif "NB3" in furnace_variant:  # NB3 (KE8/M2/EVO)
+    elif "NB3" in furnace_variant:
         cfg["dryer_dwell_thresh_1"] = 150.0
         cfg["dryer_dwell_thresh_2"] = 200.0
         cfg["debinder_dwell_thresh"] = None
@@ -507,7 +567,10 @@ def process_paq_file(file_bytes, filename):
         "detected_start_sec": detected_start_sec,
         "detected_start_hhmmss": detected_start_hhmmss,
         "first_probe_name": first_probe_name,
-        "operator_comment": operator_comment,
+        "operator_name": operator_name,
+        "company": company,
+        "site": site,
+        "operator_comment": clean_comments_text,
         "process_settings": process_settings,
         "probe_locations": probe_locations,
         "probe_start_info": probe_start_info,
@@ -630,14 +693,21 @@ else:
         st.plotly_chart(fig2, use_container_width=True)
 
     # --------------------------------------------------------------------------
-    # TAB 2: METADATA & PROBE MAP
+    # TAB 2: METADATA & PROBE MAP (STRUCTURED & CLEANED)
     # --------------------------------------------------------------------------
     with tabs[1]:
         col_a, col_b = st.columns(2)
         with col_a:
-            st.subheader("📝 Operator Comments & Recipe Settings")
-            st.text_area("Operator Comments", data1["operator_comment"], height=120)
-            st.text_area("Recipe / Process Settings", data1["process_settings"], height=200)
+            st.subheader("📝 Operator Metadata & Recipe Settings")
+            
+            # Individual Boxes for Structured Operator Info
+            m1, m2, m3 = st.columns(3)
+            m1.text_input("👤 Operator Name", data1["operator_name"], disabled=True)
+            m2.text_input("🏢 Company", data1["company"], disabled=True)
+            m3.text_input("📍 Site", data1["site"], disabled=True)
+
+            st.text_area("💬 Additional Comments / Notes", data1["operator_comment"], height=100)
+            st.text_area("⚙️ Recipe / Process Settings", data1["process_settings"], height=180)
 
         with col_b:
             st.subheader("📍 Thermocouple Channel Locations")
@@ -798,6 +868,7 @@ else:
         st.subheader("💾 Unified 1-Row Dataset (Database Ready)")
         row_data = {
             "File_Name": data1["filename"], "Furnace_Type": f_variant,
+            "Operator_Name": data1["operator_name"], "Company": data1["company"], "Site": data1["site"],
             "Entrance_Time": data1["detected_start_hhmmss"], "Line_Speed_MPM": data1["line_speed_mpm"]
         }
         for pb in [f"PB{i}" for i in range(1, 9)]:
