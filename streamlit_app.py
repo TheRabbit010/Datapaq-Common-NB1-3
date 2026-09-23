@@ -293,27 +293,31 @@ def process_paq_file(file_bytes, filename):
     found_probes = []
 
     for s in raw_texts:
-        # Reject paths
+        # Reject paths and file extensions
         if re.search(r'\\\\|\b[A-Z]:\\', s): continue
         if re.search(r'\.(ovn|prd|pro|rec|paq|jpg|png|bmp)\b', s, re.IGNORECASE): continue
-        if re.search(r'\\Users\\', s, re.IGNORECASE): continue
+        if re.search(r'\\Users\\|Desktop', s, re.IGNORECASE): continue
         
-        # Split by C++ classes that merge text
-        parts = re.split(r'\b(?:CProbe|CSampleInterval|CAxisCustomUnits|CPaqfile|CByteDataArray|CProbeResult|CFurnaceRecipe|CZoom|CProbeMapEntry\w*|cho1-sv|CProcessFile|COven|CZone|CRecipe|CProduct)\b', s)
+        # Aggressive split by C++ Class names to prevent joined garbage text
+        parts = re.split(r'\b(?:CProbe|CSampleInterval|CAxisCustomUnits|CPaqfile|CByteDataArray|CProbeResult|CFurnaceRecipe|CZoom|CProbeMapEntry\w*|cho1-sv|CProcessFile|COven|CZone|CRecipe|CProduct|CAnalysisParameters|CAlarmParameters|CAlarmProbes|CAlarmParametersTime|CRiseFallRange|CTemperatureLimits|CTimeLimits|CCustomUnits|CLineSpeed|COvenStart|CProcessOptimisation|CToleranceCurve)\b', s)
         
         for p in parts:
             p = p.strip()
             p = re.sub(r'^[>#;\.,\|]+', '', p).strip() 
             if len(p) < 3: continue
             
-            # Reject Gibberish
-            if re.search(r'(.)\1{4,}', p): continue 
+            # Reject Gibberish & Binary Fragments
+            if re.search(r'(.)\1{3,}', p): continue 
             if re.search(r'^[0-9\W]+$', p): continue 
-            if re.search(r'[@^\$|~<>{}]{2,}', p): continue 
+            if re.search(r'[@^\$|~<>{}\[\]]{2,}', p): continue 
             if len(p) > 20 and ' ' not in p: continue
+            if len(p) > 30 and sum(c.isalpha() for c in p)/len(p) < 0.4: continue
             
-            # Remove isolated binary ID tags
-            p = re.sub(r'#\d{4,}', '', p).strip()
+            # Remove Zone setup headers
+            p = re.sub(r'\b(Untitled NB#\d Entry Zone|XFER|WatCool#\d|Exit curtain|AA\d+-\d+|AirCool#\d|Exit Dryer#\d|Exit Zone|Dryer#\d)\b', '', p, flags=re.IGNORECASE)
+            
+            p = re.sub(r'#\d+', '', p)
+            p = re.sub(r'\s+', ' ', p).strip()
             if not p: continue
             
             # Classify Routing
@@ -330,6 +334,7 @@ def process_paq_file(file_bytes, filename):
     # Map Probes
     probe_locations = {}
     
+    # Check explicitly numbered probes first (e.g. #1 (°C))
     for p in found_probes:
         m = re.search(r'^#?([1-8])\s*[\(°C\)]*\s*[-:]?\s*(.+)', p)
         if m:
@@ -340,6 +345,7 @@ def process_paq_file(file_bytes, filename):
             if ch_key not in probe_locations or len(label) > len(probe_locations[ch_key]):
                 probe_locations[ch_key] = label
                 
+    # Fallback Assignment
     unassigned_probes = [p for p in found_probes if not re.search(r'^#?[1-8]\s*[\(°C\)]', p)]
     assigned_idx = 1
     for p in unassigned_probes:
