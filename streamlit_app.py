@@ -20,9 +20,10 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Inject Custom CSS to make Metrics larger and bolder
+# Inject Custom CSS for UI Enhancements
 st.markdown("""
 <style>
+/* 1. Make Main Metrics Larger */
 div[data-testid="stMetricValue"] {
     font-size: 2.8rem !important;
     font-weight: 700 !important;
@@ -32,7 +33,7 @@ div[data-testid="stMetricLabel"] {
     font-weight: 500 !important;
     color: #a0aab2 !important;
 }
-/* Style for Reset Button */
+/* 2. Style for Reset Button */
 div.stButton > button:first-child {
     background-color: #ff4b4b;
     color: white;
@@ -45,12 +46,12 @@ div.stButton > button:first-child:hover {
     background-color: #ff3333;
     border-color: #ff3333;
 }
-/* Make Tab Headers Larger */
+/* 3. Make Tab Headers Larger */
 button[data-baseweb="tab"] {
     font-size: 1.2rem !important;
     font-weight: 600 !important;
 }
-/* Make Success Message Text Larger */
+/* 4. Make Success Message Text Larger */
 div[data-testid="stAlert"] {
     font-size: 1.3rem !important;
     font-weight: 500 !important;
@@ -71,7 +72,7 @@ PROBE_COLORS = {
     "PB#8": "#00ffff"  # Cyan
 }
 
-# Group Color Definitions for Plotly Graphs (Adjusted for Dark Mode)
+# Group Color Definitions for Plotly Graphs
 GROUP_COLORS = {
     "Dryer": "rgba(255, 235, 156, 0.15)",
     "Debinder": "rgba(255, 199, 119, 0.15)",
@@ -443,7 +444,6 @@ def process_paq_file(file_bytes, filename):
     base_cfg = FURNACE_CONFIGS.get(furnace_id, FURNACE_CONFIGS["NB3"])
     cfg = dict(base_cfg)
 
-    # Threshold overrides based on rules
     if "RAD" in furnace_variant:
         cfg.update({"dryer_dwell_thresh_1": 150.0, "dryer_dwell_thresh_2": 175.0, "debinder_dwell_thresh": 200.0, "brazing_dwell_thresh_1": 550.0, "brazing_dwell_thresh_2": 583.0, "brazing_dwell_thresh_3": 591.0, "brazing_dwell_thresh_4": 600.0})
     elif "NB1" in furnace_variant:
@@ -520,7 +520,6 @@ else:
     furnace_duration_secs = int(furnace_duration_mins * 60)
 
     st.success(f"✓ File Loaded Successfully: **{data1['filename']}**")
-    
     m_col1, m_col2, m_col3 = st.columns(3)
     m_col1.metric("Confirmed Furnace", f_variant)
     m_col2.metric("Conveyor Speed", f"{data1['line_speed_mpm']:.3f} m/min")
@@ -585,7 +584,6 @@ else:
         st.plotly_chart(fig1, use_container_width=True)
         st.markdown("---")
         
-        # === MOVED METADATA AND PROBE SETTINGS INTO TAB 0 HERE ===
         col_a, col_b = st.columns(2)
         with col_a:
             st.subheader("👤 Operator Info")
@@ -607,6 +605,35 @@ else:
                 st.subheader("🖼️ PAQ Image")
                 st.image(data1["embedded_img"], use_container_width=True)
 
+        st.markdown("---")
+        
+        # Build Inspection Matrix before displaying it
+        stages = cfg["stages"]
+        has_debinder = any(s["Stage"] == "Debinder" for s in stages)
+        dryer_info = next((s for s in stages if s["Stage"] == "Dryer"), stages[0])
+        debinder_info = next((s for s in stages if s["Stage"] == "Debinder"), None) if has_debinder else None
+        brazing_info = next((s for s in stages if s["Stage"] == "Brazing"), stages[-1])
+
+        dryer_df = df_m1[(df_m1["Distance_Meters"] >= dryer_info["Start (m)"]) & (df_m1["Distance_Meters"] <= dryer_info["End (m)"])]
+        debinder_df = df_m1[(df_m1["Distance_Meters"] >= debinder_info["Start (m)"]) & (df_m1["Distance_Meters"] <= debinder_info["End (m)"])] if debinder_info else None
+        brazing_df = df_m1[(df_m1["Distance_Meters"] >= brazing_info["Start (m)"]) & (df_m1["Distance_Meters"] <= brazing_info["End (m)"])]
+
+        matrix_rows = []
+        for col in probe_cols:
+            r = {"Probe": col, "Dryer Max (°C)": round(dryer_df[col].max(), 1) if not dryer_df.empty else np.nan}
+            for dt in [cfg.get("dryer_dwell_thresh_1"), cfg.get("dryer_dwell_thresh_2")]:
+                if dt is not None: r[f"Dryer Dwell (≥{int(dt)}°C)"] = format_dwell_time((dryer_df[col] >= dt).sum()) if not dryer_df.empty else "00:00:00"
+            if has_debinder and debinder_df is not None:
+                d_thresh = cfg.get("debinder_dwell_thresh", 300.0) or 300.0
+                r["Debinder Max (°C)"] = round(debinder_df[col].max(), 1) if not debinder_df.empty else np.nan
+                r[f"Debinder Dwell (≥{int(d_thresh)}°C)"] = format_dwell_time((debinder_df[col] >= d_thresh).sum()) if not debinder_df.empty else "00:00:00"
+            r["Brazing Max (°C)"] = round(brazing_df[col].max(), 1) if not brazing_df.empty else np.nan
+            for bt in [cfg.get(f"brazing_dwell_thresh_{i}") for i in range(1, 5)]:
+                if bt is not None: r[f"Brazing Dwell (≥{int(bt)}°C)"] = format_dwell_time((brazing_df[col] >= bt).sum()) if not brazing_df.empty else "00:00:00"
+            matrix_rows.append(r)
+            
+        st.subheader(f"⏱️ Inspection Matrix — {f_variant}")
+        st.dataframe(pd.DataFrame(matrix_rows), use_container_width=True, hide_index=True)
         st.markdown("---")
         
         show_indiv_chart = st.toggle("👁️ Show / Hide Individually Aligned Chart", value=True)
@@ -641,38 +668,10 @@ else:
             zone_max_records.append(r)
 
         df_zone_summary = pd.DataFrame(zone_max_records)
-        try: st.dataframe(df_zone_summary.style.background_gradient(cmap="OrRd", subset=probe_cols + ["Zone Peak (°C)"]), use_container_width=True)
+        try: st.dataframe(df_zone_summary.style.background_gradient(cmap="OrRd", subset=probe_cols + ["Zone Peak (°C)"]).format({col: "{:.2f}" for col in probe_cols + ["Zone Peak (°C)"]}), use_container_width=True)
         except Exception: st.dataframe(df_zone_summary, use_container_width=True)
 
         st.markdown("---")
-        st.subheader(f"⏱️ Inspection Matrix — {f_variant}")
-        stages = cfg["stages"]
-        has_debinder = any(s["Stage"] == "Debinder" for s in stages)
-        dryer_info = next((s for s in stages if s["Stage"] == "Dryer"), stages[0])
-        debinder_info = next((s for s in stages if s["Stage"] == "Debinder"), None) if has_debinder else None
-        brazing_info = next((s for s in stages if s["Stage"] == "Brazing"), stages[-1])
-
-        dryer_df = df_m1[(df_m1["Distance_Meters"] >= dryer_info["Start (m)"]) & (df_m1["Distance_Meters"] <= dryer_info["End (m)"])]
-        debinder_df = df_m1[(df_m1["Distance_Meters"] >= debinder_info["Start (m)"]) & (df_m1["Distance_Meters"] <= debinder_info["End (m)"])] if debinder_info else None
-        brazing_df = df_m1[(df_m1["Distance_Meters"] >= brazing_info["Start (m)"]) & (df_m1["Distance_Meters"] <= brazing_info["End (m)"])]
-
-        matrix_rows = []
-        for col in probe_cols:
-            r = {"Probe": col, "Dryer Max (°C)": round(dryer_df[col].max(), 1) if not dryer_df.empty else np.nan}
-            for dt in [cfg.get("dryer_dwell_thresh_1"), cfg.get("dryer_dwell_thresh_2")]:
-                if dt is not None: r[f"Dryer Dwell (≥{int(dt)}°C)"] = format_dwell_time((dryer_df[col] >= dt).sum()) if not dryer_df.empty else "00:00:00"
-            if has_debinder and debinder_df is not None:
-                d_thresh = cfg.get("debinder_dwell_thresh", 300.0) or 300.0
-                r["Debinder Max (°C)"] = round(debinder_df[col].max(), 1) if not debinder_df.empty else np.nan
-                r[f"Debinder Dwell (≥{int(d_thresh)}°C)"] = format_dwell_time((debinder_df[col] >= d_thresh).sum()) if not debinder_df.empty else "00:00:00"
-            r["Brazing Max (°C)"] = round(brazing_df[col].max(), 1) if not brazing_df.empty else np.nan
-            for bt in [cfg.get(f"brazing_dwell_thresh_{i}") for i in range(1, 5)]:
-                if bt is not None: r[f"Brazing Dwell (≥{int(bt)}°C)"] = format_dwell_time((brazing_df[col] >= bt).sum()) if not brazing_df.empty else "00:00:00"
-            matrix_rows.append(r)
-        st.dataframe(pd.DataFrame(matrix_rows), use_container_width=True, hide_index=True)
-        
-        st.markdown("---")
-        # === MOVED INDIVIDUAL ENTRY ALIGNMENT TABLE INTO TAB 1 ===
         st.subheader("⏱️ Entry Alignment (60°C)")
         shift_rows = [{"Probe": col, "Start Time (HH:MM:SS)": info["Start_HHMMSS"], "Start Sec": f"{info['Start_Sec']}s", "Lag Time vs First": f"+{info['Offset_Sec']}s" if info['Offset_Sec'] > 0 else "0s (Lead)", "Distance Shift": f"+{info['Offset_Meters']:.2f} m" if info['Offset_Meters'] > 0 else "0.00 m (Lead)", "Status": "🏆 First (Lead)" if info["Is_First"] else f"+{info['Offset_Meters']:.2f} m lag"} for col, info in data1["probe_start_info"].items()]
         st.dataframe(pd.DataFrame(shift_rows), use_container_width=True, hide_index=True)
