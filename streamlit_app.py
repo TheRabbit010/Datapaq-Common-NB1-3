@@ -62,13 +62,6 @@ FURNACE_CONFIGS = {
             {"Stage": "Brazing", "Start (m)": 21.81, "End (m)": 42.97, "thresh": 577.0},
         ],
         "trigger_temp_brazing": 577.0,
-        "dryer_dwell_thresh_1": 150.0,
-        "dryer_dwell_thresh_2": 200.0,
-        "debinder_dwell_thresh": 300.0,
-        "brazing_dwell_thresh_1": 550.0,
-        "brazing_dwell_thresh_2": 577.0,
-        "brazing_dwell_thresh_3": 591.0,
-        "brazing_dwell_thresh_4": 600.0,
     },
     "NB2": {
         "line_speed_mpm": 1.560,
@@ -96,13 +89,6 @@ FURNACE_CONFIGS = {
             {"Stage": "Brazing", "Start (m)": 8.73, "End (m)": 30.33, "thresh": 577.0},
         ],
         "trigger_temp_brazing": 577.0,
-        "dryer_dwell_thresh_1": 200.0,
-        "dryer_dwell_thresh_2": 250.0,
-        "debinder_dwell_thresh": None,
-        "brazing_dwell_thresh_1": 550.0,
-        "brazing_dwell_thresh_2": 577.0,
-        "brazing_dwell_thresh_3": 591.0,
-        "brazing_dwell_thresh_4": 600.0,
     },
     "NB3": {
         "line_speed_mpm": 1.270,
@@ -132,13 +118,6 @@ FURNACE_CONFIGS = {
             {"Stage": "Brazing", "Start (m)": 9.14, "End (m)": 29.98, "thresh": 577.0},
         ],
         "trigger_temp_brazing": 577.0,
-        "dryer_dwell_thresh_1": 150.0,
-        "dryer_dwell_thresh_2": 200.0,
-        "debinder_dwell_thresh": None,
-        "brazing_dwell_thresh_1": 550.0,
-        "brazing_dwell_thresh_2": 577.0,
-        "brazing_dwell_thresh_3": 591.0,
-        "brazing_dwell_thresh_4": 600.0,
     }
 }
 
@@ -188,41 +167,8 @@ def format_dwell_time(total_seconds):
     h, m = divmod(m, 60)
     return f"{int(h):02d}:{int(m):02d}:{int(s):02d}"
 
-def clean_paq_text(raw_text):
-    if not raw_text:
-        return ""
-    
-    text = re.split(r'\\\\', raw_text)[0]
-    
-    parts = re.split(r'\b(?:CProbe|CSampleInterval|CAxisCustomUnits|CPaqfile|CByteDataArray|CProbeResult|CFurnaceRecipe|CZoom|CProbeMapEntry\w*|cho1-sv|CProcessFile|COven|CZone|CRecipe|CProduct|CAnalysisParameters|CAlarmParameters|CAlarmProbes|CAlarmParametersTime|CRiseFallRange|CTemperatureLimits|CTimeLimits|CCustomUnits|CLineSpeed|COvenStart|CProcessOptimisation|CToleranceCurve)\b', text)
-    
-    cleaned_parts = []
-    for p in parts:
-        p = p.strip()
-        p = re.sub(r'^[>#;\.,\|]+', '', p).strip() 
-        if len(p) < 3: continue
-        
-        # AGGRESSIVE TRUNCATION: Stop immediately if hitting a system zone tag
-        if re.search(r'\b(Untitled|Entry Zone|XFER|WatCool|Exit curtain|AirCool|Exit Zone|Dryer#1|Exit Dryer|0Hl !@f|aaa\.\.\.)\b', p, re.IGNORECASE):
-            clean_segment = re.split(r'\b(Untitled|Entry Zone|XFER|WatCool|Exit curtain|AirCool|Exit Zone|Dryer#1|Exit Dryer|0Hl !@f|aaa\.\.\.)\b', p, flags=re.IGNORECASE)[0]
-            if clean_segment.strip():
-                cleaned_parts.append(clean_segment.strip())
-            break 
-            
-        # Standard junk filtering
-        if re.search(r'(.)\1{3,}', p): continue 
-        if re.search(r'[@^\$|~<>{}\[\]]{2,}', p): continue 
-        if re.search(r'^[0-9\W]+$', p): continue 
-        
-        p = re.sub(r'#\d+', '', p)
-        p = re.sub(r'\s+', ' ', p).strip()
-        
-        if p and len(p) >= 3:
-            cleaned_parts.append(p)
-            
-    return " ".join(cleaned_parts)
-
 def parse_operator_and_metadata(comments_list):
+    """Extract Operator, Company, Site and Clean the Notes"""
     combined = " ".join(comments_list)
     op, comp, site = "N/A", "N/A", "N/A"
     
@@ -232,39 +178,36 @@ def parse_operator_and_metadata(comments_list):
     m_comp = re.search(r'\b(VSTS|Datapaq)\b', combined, re.IGNORECASE)
     if m_comp: comp = m_comp.group(1).strip()
     
-    m_op = re.search(r'\b(Sunisa|[A-Z][a-z]{3,15})\b\s+(?:Monthly|WK|date|product|validation|run|test)', combined, re.IGNORECASE)
+    combined_clean_start = re.sub(r'^\s*CAlarm\s*', '', combined)
+    
+    m_op = re.search(r'^([A-Za-z/]+)\s+(?:Monthly|WK|date|product|validation|run|test)', combined_clean_start, re.IGNORECASE)
     if m_op: op = m_op.group(1).strip()
-    elif "Sunisa" in combined: op = "Sunisa"
+    elif "Niwat" in combined_clean_start: op = "Niwat"
+    elif "Sunisa" in combined_clean_start: op = "Sunisa"
 
-    # Aggressive cut for comments box BEFORE applying other logic
-    chopped_comment = re.split(r'\b(Untitled|Entry Zone|0Hl|!@f|"onB|aaa\.\.\.|FFGCC|bbbRRR|LNNSQ)\b', combined, flags=re.IGNORECASE)[0]
+    # Aggressive cut for comments box
+    chopped_comment = re.split(r'\b(Untitled|Entry Zone|0Hl|!@f|"onB|aaa\.\.\.|FFGCC|bbbRRR|LNNSQ)\b', combined_clean_start, flags=re.IGNORECASE)[0]
     
     clean_notes = chopped_comment
-    for token in [op, comp, site]:
+    for token in [op, comp, site, "CAlarm"]:
         if token != "N/A":
             clean_notes = re.sub(rf'^\s*{re.escape(token)}\b\s*', '', clean_notes, flags=re.IGNORECASE)
             clean_notes = re.sub(rf'\s+\b{re.escape(token)}\b\s+', ' ', clean_notes, flags=re.IGNORECASE)
 
-    clean_notes = clean_paq_text(clean_notes)
-
-    # Split general comments from specific process notes
-    split_match = re.search(r'(.*?)(Exit Dryer|BTM M48 gap250|XFER\b)(.*)', clean_notes, re.IGNORECASE)
-    
+    # Truncate leaked probe locations from the comment
+    split_match = re.search(r'(.*?)(?:\s+)?\b([A-Za-z]?Middle\s+left|[A-Za-z]?Middle\s+right|[A-Za-z]?Left\s+core|[A-Za-z]?Right\s+core|Bottom cooler|Top cooler)\b', clean_notes, flags=re.IGNORECASE)
     if split_match:
-        comment_part = split_match.group(1).strip()
-        notes_part = (split_match.group(2) + split_match.group(3)).strip()
-    else:
-        comment_part = clean_notes
-        notes_part = ""
+        clean_notes = split_match.group(1).strip()
+        
+    clean_notes = re.sub(r'[\.,\s]+$', '.', clean_notes).strip()
 
-    return op, comp, site, comment_part if comment_part else "N/A", notes_part if notes_part else "N/A"
+    return op, comp, site, clean_notes if clean_notes else "N/A"
 
 @st.cache_data
 def process_paq_file(file_bytes, filename):
     ole_bytes = io.BytesIO(file_bytes)
     ole = olefile.OleFileIO(ole_bytes)
 
-    # 1. Probe Streams Processing
     probe_streams = [s for s in ole.listdir() if len(s) >= 4 and s[0] == 'Paqfiles' and s[2] == 'ProbeResults']
     probe_streams = sorted(probe_streams, key=lambda x: x[-1])
 
@@ -289,7 +232,6 @@ def process_paq_file(file_bytes, filename):
 
     probe_cols = [col for col in df_master.columns if col.startswith("PB#")]
 
-    # 2. Entrance Detection
     SUSTAINED_SECONDS = 15
     probe_start_secs = {}
     for col in probe_cols:
@@ -304,7 +246,6 @@ def process_paq_file(file_bytes, filename):
     first_probe_name = [k for k, v in probe_start_secs.items() if v == detected_start_sec][0] if valid_starts else probe_cols[0]
     detected_start_hhmmss = df_master[df_master["Time_Seconds"] == detected_start_sec].iloc[0]["Time_HHMMSS"]
 
-    # 3. Stream Scanning Loop for Metadata, Recipe, Image, and Probe Locations
     raw_texts = []
     embedded_img = None
 
@@ -319,7 +260,6 @@ def process_paq_file(file_bytes, filename):
                     try: data_b = zlib.decompress(raw_b[8:] if raw_b.startswith(b'ZLIB') else raw_b, -zlib.MAX_WBITS)
                     except Exception: pass
 
-            # Extract Image
             if embedded_img is None and len(data_b) > 500:
                 for header in [b'\x89PNG\r\n\x1a\n', b'\xff\xd8\xff', b'BM']:
                     idx = data_b.find(header)
@@ -329,7 +269,6 @@ def process_paq_file(file_bytes, filename):
                             break
                         except Exception: pass
 
-            # Extract ASCII Strings
             ascii_matches = re.findall(rb'[\x20-\x7E]{4,}', data_b)
             for m in ascii_matches:
                 raw_texts.append(m.decode('ascii', errors='ignore').strip())
@@ -341,36 +280,52 @@ def process_paq_file(file_bytes, filename):
     found_probes = []
 
     for s in raw_texts:
-        # Reject paths and file extensions
         if re.search(r'\\\\|\b[A-Z]:\\', s): continue
         if re.search(r'\.(ovn|prd|pro|rec|paq|jpg|png|bmp)\b', s, re.IGNORECASE): continue
         if re.search(r'\\Users\\|Desktop', s, re.IGNORECASE): continue
         
-        # Route recipe strings directly without heavy cleaning
         is_recipe = re.search(r'\b(O2 Exit|ppm|CV speed|mm/min|N2 Flow|WJ Flow|Top Temp|Bot temp|SP1|SP2\s*==>)\b', s, re.IGNORECASE)
         if is_recipe:
             s_rec = re.sub(r'\b(?:CProcessFile|COven|CZone|CRecipe|CProduct|CAnalysisParameters|CToleranceCurve)\b', '', s).strip()
             s_rec = re.sub(r'^[>#;\.,\|]+', '', s_rec).strip()
+            # Format Recipe to wrap lines automatically based on target keywords
+            s_rec = re.sub(r'(WJ Flow)', r'\n\1', s_rec)
+            s_rec = re.sub(r'(NB Top Temp)', r'\n\1', s_rec)
+            s_rec = re.sub(r'(NB Bot temp)', r'\n\1', s_rec)
+            
             if s_rec and s_rec not in found_recipes: 
                 found_recipes.append(s_rec)
             continue
             
-        # Clean probes and comments
-        s_clean = clean_paq_text(s)
-        if not s_clean: continue
+        parts = re.split(r'\b(?:CProbe|CSampleInterval|CAxisCustomUnits|CPaqfile|CByteDataArray|CProbeResult|CFurnaceRecipe|CZoom|CProbeMapEntry\w*|cho1-sv|CProcessFile|COven|CZone|CRecipe|CProduct|CAnalysisParameters|CAlarmParameters|CAlarmProbes|CAlarmParametersTime|CRiseFallRange|CTemperatureLimits|CTimeLimits|CCustomUnits|CLineSpeed|COvenStart|CProcessOptimisation|CToleranceCurve)\b', s)
         
-        is_probe = re.search(r'\b(cooler|drill&insert|inside H/D)\b', s_clean, re.IGNORECASE)
-        if is_probe:
-            if s_clean not in found_probes: found_probes.append(s_clean)
-        else:
-            if s_clean not in found_comments: found_comments.append(s_clean)
+        for p in parts:
+            p = p.strip()
+            p = re.sub(r'^[>#;\.,\|]+', '', p).strip() 
+            if len(p) < 3: continue
+            
+            if re.search(r'\b(Untitled|Entry Zone|XFER|WatCool|Exit curtain|AirCool|Exit Zone|Dryer#1|Exit Dryer|0Hl !@f|aaa\.\.\.)\b', p, re.IGNORECASE):
+                clean_segment = re.split(r'\b(Untitled|Entry Zone|XFER|WatCool|Exit curtain|AirCool|Exit Zone|Dryer#1|Exit Dryer|0Hl !@f|aaa\.\.\.)\b', p, flags=re.IGNORECASE)[0]
+                if clean_segment.strip(): p = clean_segment.strip()
+                else: continue
+                
+            if re.search(r'(.)\1{3,}', p): continue 
+            if re.search(r'[@^\$|~<>{}\[\]]{2,}', p): continue 
+            if re.search(r'^[0-9\W]+$', p): continue 
+            
+            p = re.sub(r'#\d+', '', p)
+            p = re.sub(r'\s+', ' ', p).strip()
+            if not p or len(p) < 3: continue
+            
+            is_probe = re.search(r'\b(cooler|drill&insert|inside H/D|manifold|core)\b', p, re.IGNORECASE)
+            if is_probe:
+                if p not in found_probes: found_probes.append(p)
+            else:
+                if p not in found_comments: found_comments.append(p)
 
     # Map Probes
     probe_locations = {}
-    
-    # Check explicitly numbered probes first (e.g. #1 (°C))
     for p in found_probes:
-        # Only grab the text from the start of the probe label until end of line
         m = re.search(r'^#?([1-8])\s*[\(°C\)]*\s*[-:]?\s*(.+)', p)
         if m:
             idx = int(m.group(1))
@@ -380,7 +335,6 @@ def process_paq_file(file_bytes, filename):
             if ch_key not in probe_locations or len(label) > len(probe_locations[ch_key]):
                 probe_locations[ch_key] = label
                 
-    # Fallback Assignment
     unassigned_probes = [p for p in found_probes if not re.search(r'^#?[1-8]\s*[\(°C\)]', p)]
     assigned_idx = 1
     for p in unassigned_probes:
@@ -394,11 +348,11 @@ def process_paq_file(file_bytes, filename):
         if col not in probe_locations:
             probe_locations[col] = f"Channel {col.replace('PB#', '')} (Unlabeled)"
 
-    operator_name, company, site, clean_comments_text, process_notes_text = parse_operator_and_metadata(found_comments)
+    operator_name, company, site, clean_comments_text = parse_operator_and_metadata(found_comments)
     process_settings = "\n".join(found_recipes) if found_recipes else "Standard Recipe Parameters"
 
     # 4. STRICT PRIORITY AUTOMATIC FURNACE SELECTION LOGIC
-    recipe_corpus = f"{process_settings} {clean_comments_text} {process_notes_text} {filename}"
+    recipe_corpus = f"{process_settings} {clean_comments_text} {filename}"
 
     furnace_id = "NB3"
     furnace_variant = "NB3"
@@ -426,6 +380,7 @@ def process_paq_file(file_bytes, filename):
     base_cfg = FURNACE_CONFIGS.get(furnace_id, FURNACE_CONFIGS["NB3"])
     cfg = dict(base_cfg)
 
+    # Threshold overrides based on rules
     if "RAD" in furnace_variant:
         cfg.update({"dryer_dwell_thresh_1": 150.0, "dryer_dwell_thresh_2": 175.0, "debinder_dwell_thresh": 200.0, "brazing_dwell_thresh_1": 550.0, "brazing_dwell_thresh_2": 583.0, "brazing_dwell_thresh_3": 591.0, "brazing_dwell_thresh_4": 600.0})
     elif "NB1" in furnace_variant:
@@ -464,7 +419,7 @@ def process_paq_file(file_bytes, filename):
         "line_speed_mpm": line_speed_mpm, "detected_start_sec": detected_start_sec,
         "detected_start_hhmmss": detected_start_hhmmss, "first_probe_name": first_probe_name,
         "operator_name": operator_name, "company": company, "site": site,
-        "operator_comment": clean_comments_text, "process_notes": process_notes_text, "process_settings": process_settings,
+        "operator_comment": clean_comments_text, "process_settings": process_settings,
         "probe_locations": probe_locations, "probe_start_info": probe_start_info,
         "embedded_img": embedded_img
     }
@@ -492,7 +447,6 @@ else:
 
     df_m1, f_variant, cfg, zones, probe_cols = data1["df_master"], data1["furnace_variant"], data1["cfg"], data1["cfg"]["zones"], data1["probe_cols"]
 
-    # Calculate actual "Time in Furnace" based on line speed and physical length
     total_furnace_length = zones[-1]["start"] + zones[-1]["length"]
     furnace_duration_mins = total_furnace_length / data1['line_speed_mpm']
     furnace_duration_secs = int(furnace_duration_mins * 60)
@@ -516,8 +470,6 @@ else:
             z_color = GROUP_COLORS.get(z["group"], "rgba(200, 200, 200, 0.2)")
             fig1.add_vrect(x0=z["start"], x1=z["start"] + z["length"], fillcolor=z_color, layer="below", line_width=0.5, line_dash="dot", line_color="rgba(120, 120, 120, 0.4)", annotation_text=f"{z['num']}.{z['name']}", annotation_position="top left", annotation=dict(font_size=9, font_color="#222222", textangle=-90))
         fig1.add_hline(y=cfg["trigger_temp_brazing"], line_dash="dash", line_color="red", annotation_text=f"Brazing ({cfg['trigger_temp_brazing']}°C)", annotation_position="bottom right")
-        
-        # Limit X-Axis to end right after the furnace length
         fig1.update_layout(title=f"GLOBAL FURNACE PROFILE ({f_variant}): {data1['filename']}", xaxis=dict(title="Furnace Distance (Meters from Entrance)", range=[-1, total_furnace_length + 2]), yaxis_title="Temperature (°C)", hovermode="x unified", template="plotly_white", height=550)
         st.plotly_chart(fig1, use_container_width=True)
 
@@ -531,8 +483,6 @@ else:
         for z in zones:
             z_color = GROUP_COLORS.get(z["group"], "rgba(200, 200, 200, 0.2)")
             fig2.add_vrect(x0=z["start"], x1=z["start"] + z["length"], fillcolor=z_color, layer="below", line_width=0.5, line_dash="dot", line_color="rgba(120, 120, 120, 0.4)", annotation_text=f"{z['num']}.{z['name']}", annotation_position="top left", annotation=dict(font_size=9, font_color="#222222", textangle=-90))
-        
-        # Limit X-Axis to end right after the furnace length
         fig2.update_layout(title=f"INDIVIDUALLY ALIGNED PROFILES ({f_variant}): {data1['filename']}", xaxis=dict(title="Individual Probe Distance (Meters from Probe's 60°C Entry)", range=[-1, total_furnace_length + 2]), yaxis_title="Temperature (°C)", hovermode="x unified", template="plotly_white", height=550)
         st.plotly_chart(fig2, use_container_width=True)
 
@@ -544,8 +494,7 @@ else:
             m1.text_input("👤 Operator Name", data1["operator_name"], disabled=True)
             m2.text_input("🏢 Company", data1["company"], disabled=True)
             m3.text_input("📍 Site", data1["site"], disabled=True)
-            st.text_area("📝 Process Notes", data1["process_notes"], height=120)
-            st.text_area("💬 Additional Comments / Notes", data1["operator_comment"], height=120)
+            st.text_area("💬 Additional Comments / Notes", data1["operator_comment"], height=160)
             st.text_area("⚙️ Recipe / Process Settings", data1["process_settings"], height=200)
 
         with col_b:
