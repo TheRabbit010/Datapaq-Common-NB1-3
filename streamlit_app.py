@@ -11,19 +11,35 @@ import streamlit as st
 from PIL import Image
 
 # ==============================================================================
-# STREAMLIT PAGE CONFIGURATION
+# STREAMLIT PAGE CONFIGURATION & CSS STYLING
 # ==============================================================================
 st.set_page_config(
     page_title="Datapaq .PAQ Analyzer & Furnace Profiler",
     page_icon="🔥",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
-# Group Color Definitions for Plotly Graphs (Adjusted for Dark Mode visibility)
+# Inject Custom CSS to make Metrics larger and bolder
+st.markdown("""
+<style>
+div[data-testid="stMetricValue"] {
+    font-size: 2.8rem !important;
+    font-weight: 700 !important;
+}
+div[data-testid="stMetricLabel"] {
+    font-size: 1.1rem !important;
+    font-weight: 500 !important;
+    color: #a0aab2 !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
+# Group Color Definitions for Plotly Graphs (Adjusted for Dark Mode)
 GROUP_COLORS = {
     "Dryer": "rgba(255, 235, 156, 0.15)",
     "Debinder": "rgba(255, 199, 119, 0.15)",
-    "Heating": "rgba(255, 160, 160, 0.10)",
+    "Heating": "rgba(255, 160, 160, 0.15)",
     "Cooling": "rgba(173, 216, 230, 0.15)"
 }
 
@@ -62,6 +78,13 @@ FURNACE_CONFIGS = {
             {"Stage": "Brazing", "Start (m)": 21.81, "End (m)": 42.97, "thresh": 577.0},
         ],
         "trigger_temp_brazing": 577.0,
+        "dryer_dwell_thresh_1": 150.0,
+        "dryer_dwell_thresh_2": 200.0,
+        "debinder_dwell_thresh": 300.0,
+        "brazing_dwell_thresh_1": 550.0,
+        "brazing_dwell_thresh_2": 577.0,
+        "brazing_dwell_thresh_3": 591.0,
+        "brazing_dwell_thresh_4": 600.0,
     },
     "NB2": {
         "line_speed_mpm": 1.560,
@@ -89,6 +112,13 @@ FURNACE_CONFIGS = {
             {"Stage": "Brazing", "Start (m)": 8.73, "End (m)": 30.33, "thresh": 577.0},
         ],
         "trigger_temp_brazing": 577.0,
+        "dryer_dwell_thresh_1": 200.0,
+        "dryer_dwell_thresh_2": 250.0,
+        "debinder_dwell_thresh": None,
+        "brazing_dwell_thresh_1": 550.0,
+        "brazing_dwell_thresh_2": 577.0,
+        "brazing_dwell_thresh_3": 591.0,
+        "brazing_dwell_thresh_4": 600.0,
     },
     "NB3": {
         "line_speed_mpm": 1.270,
@@ -118,6 +148,13 @@ FURNACE_CONFIGS = {
             {"Stage": "Brazing", "Start (m)": 9.14, "End (m)": 29.98, "thresh": 577.0},
         ],
         "trigger_temp_brazing": 577.0,
+        "dryer_dwell_thresh_1": 150.0,
+        "dryer_dwell_thresh_2": 200.0,
+        "debinder_dwell_thresh": None,
+        "brazing_dwell_thresh_1": 550.0,
+        "brazing_dwell_thresh_2": 577.0,
+        "brazing_dwell_thresh_3": 591.0,
+        "brazing_dwell_thresh_4": 600.0,
     }
 }
 
@@ -478,11 +515,26 @@ else:
     furnace_duration_secs = int(furnace_duration_mins * 60)
 
     st.success(f"✓ File Loaded Successfully: **{data1['filename']}**")
-    m_col1, m_col2, m_col3, m_col4 = st.columns(4)
+    
+    # Custom CSS for bigger metrics
+    st.markdown("""
+    <style>
+    div[data-testid="stMetricValue"] {
+        font-size: 2.8rem !important;
+        font-weight: 700 !important;
+    }
+    div[data-testid="stMetricLabel"] {
+        font-size: 1.1rem !important;
+        font-weight: 500 !important;
+        color: #a0aab2 !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+    
+    m_col1, m_col2, m_col3 = st.columns(3)
     m_col1.metric("Confirmed Furnace", f_variant)
     m_col2.metric("Conveyor Speed", f"{data1['line_speed_mpm']:.3f} m/min")
-    m_col3.metric("Lead Probe Entrance", f"{data1['first_probe_name']} @ {data1['detected_start_hhmmss']}")
-    m_col4.metric("Time in Furnace", f"{furnace_duration_secs}s (~{furnace_duration_mins:.1f} min)")
+    m_col3.metric("Time in Furnace", f"{furnace_duration_secs}s (~{furnace_duration_mins:.1f} min)")
 
     tabs = st.tabs(["📊 Profile Graphs", "📝 Metadata & Probe Map", "🏭 Zone & Stage Summary", "📈 Statistics & Boxplots", "💾 Master Dataset & Export", "⚖️ Compare Files"])
 
@@ -498,7 +550,7 @@ else:
         fig1.add_hline(y=cfg["trigger_temp_brazing"], line_dash="dash", line_color="red", annotation_text=f"Brazing ({cfg['trigger_temp_brazing']}°C)", annotation_position="bottom right")
         
         # Limit X-Axis to end right after the furnace length
-        fig1.update_layout(title=f"GLOBAL FURNACE PROFILE ({f_variant}): {data1['filename']}", xaxis=dict(title="Furnace Distance (Meters from Entrance)", range=[-1, total_furnace_length + 2]), yaxis_title="Temperature (°C)", hovermode="x unified", template="plotly_white", height=550)
+        fig1.update_layout(title=f"GLOBAL FURNACE PROFILE ({f_variant}): {data1['filename']}", xaxis=dict(title="Furnace Distance (Meters from Entrance)", range=[-1, total_furnace_length + 2]), yaxis_title="Temperature (°C)", hovermode="x unified", template="plotly_dark", height=550)
         st.plotly_chart(fig1, use_container_width=True)
 
         st.markdown("---")
@@ -513,7 +565,7 @@ else:
             fig2.add_vrect(x0=z["start"], x1=z["start"] + z["length"], fillcolor=z_color, layer="below", line_width=0.5, line_dash="dot", line_color="rgba(120, 120, 120, 0.4)", annotation_text=f"{z['num']}.{z['name']}", annotation_position="top left", annotation=dict(font_size=9, font_color="#222222", textangle=-90))
         
         # Limit X-Axis to end right after the furnace length
-        fig2.update_layout(title=f"INDIVIDUALLY ALIGNED PROFILES ({f_variant}): {data1['filename']}", xaxis=dict(title="Individual Probe Distance (Meters from Probe's 60°C Entry)", range=[-1, total_furnace_length + 2]), yaxis_title="Temperature (°C)", hovermode="x unified", template="plotly_white", height=550)
+        fig2.update_layout(title=f"INDIVIDUALLY ALIGNED PROFILES ({f_variant}): {data1['filename']}", xaxis=dict(title="Individual Probe Distance (Meters from Probe's 60°C Entry)", range=[-1, total_furnace_length + 2]), yaxis_title="Temperature (°C)", hovermode="x unified", template="plotly_dark", height=550)
         st.plotly_chart(fig2, use_container_width=True)
 
     with tabs[1]:
@@ -643,5 +695,5 @@ else:
                     if col in df_m2.columns: fig_comp.add_trace(go.Scatter(x=df_m2["Distance_Meters"], y=df_m2[col], mode="lines", name=f"F2: {col}", line=dict(dash='dash', width=1.5)))
                 
                 # Limit X-Axis on comparison chart as well
-                fig_comp.update_layout(title=f"COMPARISON: {data1['filename']} vs {data2['filename']}", xaxis=dict(title="Distance (Meters)", range=[-1, total_furnace_length + 2]), yaxis_title="Temperature (°C)", hovermode="x unified", template="plotly_white", height=600)
+                fig_comp.update_layout(title=f"COMPARISON: {data1['filename']} vs {data2['filename']}", xaxis=dict(title="Distance (Meters)", range=[-1, total_furnace_length + 2]), yaxis_title="Temperature (°C)", hovermode="x unified", template="plotly_dark", height=600)
                 st.plotly_chart(fig_comp, use_container_width=True)
