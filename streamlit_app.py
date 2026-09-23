@@ -189,7 +189,6 @@ def format_dwell_time(total_seconds):
     return f"{int(h):02d}:{int(m):02d}:{int(s):02d}"
 
 def clean_paq_text(raw_text):
-    """Strips binary C++ class identifiers, network addresses, and cuts off at binary garbage blocks."""
     if not raw_text:
         return ""
     
@@ -204,8 +203,8 @@ def clean_paq_text(raw_text):
         if len(p) < 3: continue
         
         # AGGRESSIVE TRUNCATION: Stop immediately if hitting a system zone tag
-        if re.search(r'\b(Untitled|Entry Zone|XFER|WatCool|Exit curtain|AirCool|Exit Zone|Dryer#1|Exit Dryer|0Hl !@f|aaa\.\.\.|FFGCC)\b', p, re.IGNORECASE):
-            clean_segment = re.split(r'\b(Untitled|Entry Zone|XFER|WatCool|Exit curtain|AirCool|Exit Zone|Dryer#1|Exit Dryer|0Hl !@f|aaa\.\.\.|FFGCC)\b', p, flags=re.IGNORECASE)[0]
+        if re.search(r'\b(Untitled|Entry Zone|XFER|WatCool|Exit curtain|AirCool|Exit Zone|Dryer#1|Exit Dryer|0Hl !@f|aaa\.\.\.)\b', p, re.IGNORECASE):
+            clean_segment = re.split(r'\b(Untitled|Entry Zone|XFER|WatCool|Exit curtain|AirCool|Exit Zone|Dryer#1|Exit Dryer|0Hl !@f|aaa\.\.\.)\b', p, flags=re.IGNORECASE)[0]
             if clean_segment.strip():
                 cleaned_parts.append(clean_segment.strip())
             break 
@@ -224,18 +223,18 @@ def clean_paq_text(raw_text):
     return " ".join(cleaned_parts)
 
 def parse_operator_and_metadata(comments_list):
-    """Extract Operator, Company, Site, Clean Comments and Process Notes"""
     combined = " ".join(comments_list)
     op, comp, site = "N/A", "N/A", "N/A"
     
-    # Pre-emptively extract to avoid truncation logic hiding them
     m_site = re.search(r'(Power\s+Chonburi|Chonburi|Plant\s+\d+|Factory\s+\d+)', combined, re.IGNORECASE)
     if m_site: site = m_site.group(1).strip()
     
     m_comp = re.search(r'\b(VSTS|Datapaq)\b', combined, re.IGNORECASE)
     if m_comp: comp = m_comp.group(1).strip()
     
-    if "Sunisa" in combined: op = "Sunisa"
+    m_op = re.search(r'\b(Sunisa|[A-Z][a-z]{3,15})\b\s+(?:Monthly|WK|date|product|validation|run|test)', combined, re.IGNORECASE)
+    if m_op: op = m_op.group(1).strip()
+    elif "Sunisa" in combined: op = "Sunisa"
 
     # Aggressive cut for comments box BEFORE applying other logic
     chopped_comment = re.split(r'\b(Untitled|Entry Zone|0Hl|!@f|"onB|aaa\.\.\.|FFGCC|bbbRRR|LNNSQ)\b', combined, flags=re.IGNORECASE)[0]
@@ -347,7 +346,7 @@ def process_paq_file(file_bytes, filename):
         if re.search(r'\.(ovn|prd|pro|rec|paq|jpg|png|bmp)\b', s, re.IGNORECASE): continue
         if re.search(r'\\Users\\|Desktop', s, re.IGNORECASE): continue
         
-        # Route recipe strings directly without heavy cleaning to protect SP/Temp structures
+        # Route recipe strings directly without heavy cleaning
         is_recipe = re.search(r'\b(O2 Exit|ppm|CV speed|mm/min|N2 Flow|WJ Flow|Top Temp|Bot temp|SP1|SP2\s*==>)\b', s, re.IGNORECASE)
         if is_recipe:
             s_rec = re.sub(r'\b(?:CProcessFile|COven|CZone|CRecipe|CProduct|CAnalysisParameters|CToleranceCurve)\b', '', s).strip()
@@ -371,6 +370,7 @@ def process_paq_file(file_bytes, filename):
     
     # Check explicitly numbered probes first (e.g. #1 (°C))
     for p in found_probes:
+        # Only grab the text from the start of the probe label until end of line
         m = re.search(r'^#?([1-8])\s*[\(°C\)]*\s*[-:]?\s*(.+)', p)
         if m:
             idx = int(m.group(1))
@@ -544,8 +544,8 @@ else:
             m1.text_input("👤 Operator Name", data1["operator_name"], disabled=True)
             m2.text_input("🏢 Company", data1["company"], disabled=True)
             m3.text_input("📍 Site", data1["site"], disabled=True)
-            st.text_area("💬 Additional Comments", data1["operator_comment"], height=120)
             st.text_area("📝 Process Notes", data1["process_notes"], height=120)
+            st.text_area("💬 Additional Comments / Notes", data1["operator_comment"], height=120)
             st.text_area("⚙️ Recipe / Process Settings", data1["process_settings"], height=200)
 
         with col_b:
@@ -666,38 +666,3 @@ else:
                 # Limit X-Axis on comparison chart as well
                 fig_comp.update_layout(title=f"COMPARISON: {data1['filename']} vs {data2['filename']}", xaxis=dict(title="Distance (Meters)", range=[-1, total_furnace_length + 2]), yaxis_title="Temperature (°C)", hovermode="x unified", template="plotly_white", height=600)
                 st.plotly_chart(fig_comp, use_container_width=True)
-1.แก้ไขกล่อง Process Notes  ตามภาพตัวอย่าง 1
-2.แก้ไขตาราง Thermocouple Channel Locations โดยดึงข้อความตั้งแต่หลัง (#1) จนสิ้นสุดข้อความแต่ละบรรทัด  ตามภาพตัวอย่าง 2
-3.แก้ไขกล่องข้อความ 📝 Recipe / Process Settings ตามภาพตัวอย่าง 3
-4.เพิ่มฟังก์ชั่นให้ตาราง ⏱️ Inspection Matrix  แสดงเฉพาะข้อมูลอุณหภูมิที่ตรงตามเงื่อนไขของ 
- NB3 Detection
-กรณี BTM:
-Dryer Dwell: ≥250.0°C และ ≥300.0°C
-Brazing Dwell: ≥550.0°C, ≥577.0°C, ≥591.0°C, ≥600.0°C
-กรณี KE8 / M2 / EVO:
-Dryer Dwell: ≥150.0°C และ ≥200.0°C
-Brazing Dwell: ≥550.0°C, ≥577.0°C, ≥591.0°C, ≥600.0°C
-
-NB2 Detection
-
-Dryer Dwell: ≥200.0°C
-Dryer Dwell: ≥250.0°C
-Brazing Dwell: ≥550.0°C, ≥577.0°C, ≥591.0°C, ≥600.0°C
-
-NB1 Detection
-กรณี YMMDD, WKxx, CDS, KN9, 12SHP
-Dryer Dwell: ≥150.0°C
-Dryer Dwell: ≥200.0°C
-Debinder Dwell: ≥300.0°C
-Brazing Dwell: ≥550.0°C, ≥577.0°C, ≥591.0°C, ≥600.0°C
-กรณี RAD
-Dryer Dwell: ≥150.0°C
-Dryer Dwell: ≥175.0°C
-Debinder Dwell: ≥200.0°C
-Brazing Dwell: ≥550.0°C, ≥583.0°C, ≥591.0°C, ≥600.0°C 
-
-There is a file you can reference named "image_5ba432.png". Refer to this file by its name verbatim.
-[source: 19]
-
-There is a file you can reference named "image_5b9db0.png". Refer to this file by its name verbatim.
-[source: 20]
