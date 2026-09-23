@@ -35,6 +35,18 @@ div[data-testid="stMetricLabel"] {
 </style>
 """, unsafe_allow_html=True)
 
+# Map exact colors for Probes based on Datapaq standard
+PROBE_COLORS = {
+    "PB#1": "#ff0000", # Red
+    "PB#2": "#00ff00", # Light Green
+    "PB#3": "#0000ff", # Blue
+    "PB#4": "#8b4513", # Brown / Dark Orange
+    "PB#5": "#ff00ff", # Magenta
+    "PB#6": "#b8860b", # Olive / Dark Yellow
+    "PB#7": "#800080", # Purple
+    "PB#8": "#00ffff"  # Cyan
+}
+
 # Group Color Definitions for Plotly Graphs (Adjusted for Dark Mode)
 GROUP_COLORS = {
     "Dryer": "rgba(255, 235, 156, 0.15)",
@@ -205,7 +217,6 @@ def format_dwell_time(total_seconds):
     return f"{int(h):02d}:{int(m):02d}:{int(s):02d}"
 
 def clean_paq_text(raw_text):
-    """Strips binary C++ class identifiers, network addresses, and cuts off at binary garbage blocks."""
     if not raw_text: return ""
     text = re.split(r'\\\\', raw_text)[0]
     
@@ -217,7 +228,6 @@ def clean_paq_text(raw_text):
         p = re.sub(r'^[>#;\.,\|]+', '', p).strip() 
         if len(p) < 3: continue
         
-        # AGGRESSIVE TRUNCATION: Stop immediately if hitting a system zone tag or binary chunk
         if re.search(r'\b(Untitled|Entry Zone|XFER|WatCool|Exit curtain|AirCool|Exit Zone|Dryer#1|VSTS Exit Dryer|Exit Dryer|0Hl|!@f|"onB|aaa\.\.\.|FFGCC|bbbRRR|LNNSQ|OD@)\b', p, re.IGNORECASE):
             clean_segment = re.split(r'\b(Untitled|Entry Zone|XFER|WatCool|Exit curtain|AirCool|Exit Zone|Dryer#1|VSTS Exit Dryer|Exit Dryer|0Hl|!@f|"onB|aaa\.\.\.|FFGCC|bbbRRR|LNNSQ|OD@)\b', p, flags=re.IGNORECASE)[0]
             if clean_segment.strip():
@@ -237,26 +247,22 @@ def clean_paq_text(raw_text):
     return " ".join(cleaned_parts)
 
 def parse_operator_and_metadata(comments_list):
-    """Extract Operator, Company, Site, Clean Comments and Process Notes"""
     combined = " ".join(comments_list)
     op, comp, site = "N/A", "N/A", "N/A"
     
     m_site = re.search(r'(Power\s+Chonburi|Chonburi|Plant\s+\d+|Factory\s+\d+)', combined, re.IGNORECASE)
     if m_site: site = m_site.group(1).strip()
     
-    # Prioritize VSTS over Datapaq
     m_comp = re.search(r'\b(VSTS)\b', combined, re.IGNORECASE)
     if not m_comp: m_comp = re.search(r'\b(Datapaq)\b', combined, re.IGNORECASE)
     if m_comp: comp = m_comp.group(1).strip()
     
-    # Extract Operator (handle cases like CAlarm Sunisa/Niwat)
     combined_clean_start = re.sub(r'^\s*CAlarm\s*', '', combined, flags=re.IGNORECASE)
     m_op = re.search(r'^([A-Za-z/]+)\s+(?:Monthly|WK|date|product|validation|run|test)', combined_clean_start, re.IGNORECASE)
     if m_op: op = m_op.group(1).strip()
     elif "Niwat" in combined_clean_start: op = "Niwat"
     elif "Sunisa" in combined_clean_start: op = "Sunisa"
 
-    # Aggressive cut for comments box
     chopped_comment = re.split(r'\b(Untitled|Entry Zone|VSTS Exit Dryer|Exit Dryer|0Hl|!@f|"onB|aaa\.\.\.|FFGCC|bbbRRR|LNNSQ|OD@)\b', combined_clean_start, flags=re.IGNORECASE)[0]
     
     clean_notes = chopped_comment
@@ -265,17 +271,14 @@ def parse_operator_and_metadata(comments_list):
             clean_notes = re.sub(rf'^\s*{re.escape(token)}\b\s*', '', clean_notes, flags=re.IGNORECASE)
             clean_notes = re.sub(rf'\s+\b{re.escape(token)}\b\s+', ' ', clean_notes, flags=re.IGNORECASE)
 
-    # Truncate leaked probe locations from the comment
     split_match = re.search(r'(.*?)(?:\s+)?\b([A-Za-z]?Middle\s+left|[A-Za-z]?Middle\s+right|[A-Za-z]?Left\s+core|[A-Za-z]?Right\s+core|Bottom cooler|Top cooler)\b', clean_notes, flags=re.IGNORECASE)
     if split_match:
         clean_notes = split_match.group(1).strip()
         
     clean_notes = re.sub(r'[\.,\s]+$', '.', clean_notes).strip()
-
     return op, comp, site, clean_notes if clean_notes else "N/A"
 
 def clean_probe_location(loc_desc):
-    # Remove rogue single uppercase letters preceding keywords (e.g. BLeft -> Left, JMiddle -> Middle)
     return re.sub(r'\b[A-Z](Left|Right|Middle|Bottom|Top)\b', r'\1', loc_desc, flags=re.IGNORECASE)
 
 @st.cache_data
@@ -283,7 +286,6 @@ def process_paq_file(file_bytes, filename):
     ole_bytes = io.BytesIO(file_bytes)
     ole = olefile.OleFileIO(ole_bytes)
 
-    # 1. Probe Streams Processing
     probe_streams = [s for s in ole.listdir() if len(s) >= 4 and s[0] == 'Paqfiles' and s[2] == 'ProbeResults']
     probe_streams = sorted(probe_streams, key=lambda x: x[-1])
 
@@ -308,7 +310,6 @@ def process_paq_file(file_bytes, filename):
 
     probe_cols = [col for col in df_master.columns if col.startswith("PB#")]
 
-    # 2. Entrance Detection
     SUSTAINED_SECONDS = 15
     probe_start_secs = {}
     for col in probe_cols:
@@ -323,7 +324,6 @@ def process_paq_file(file_bytes, filename):
     first_probe_name = [k for k, v in probe_start_secs.items() if v == detected_start_sec][0] if valid_starts else probe_cols[0]
     detected_start_hhmmss = df_master[df_master["Time_Seconds"] == detected_start_sec].iloc[0]["Time_HHMMSS"]
 
-    # 3. Stream Scanning Loop for Metadata, Recipe, Image, and Probe Locations
     raw_texts = []
     embedded_img = None
 
@@ -338,7 +338,6 @@ def process_paq_file(file_bytes, filename):
                     try: data_b = zlib.decompress(raw_b[8:] if raw_b.startswith(b'ZLIB') else raw_b, -zlib.MAX_WBITS)
                     except Exception: pass
 
-            # Extract Image
             if embedded_img is None and len(data_b) > 500:
                 for header in [b'\x89PNG\r\n\x1a\n', b'\xff\xd8\xff', b'BM']:
                     idx = data_b.find(header)
@@ -348,7 +347,6 @@ def process_paq_file(file_bytes, filename):
                             break
                         except Exception: pass
 
-            # Extract ASCII Strings
             ascii_matches = re.findall(rb'[\x20-\x7E]{4,}', data_b)
             for m in ascii_matches:
                 raw_texts.append(m.decode('ascii', errors='ignore').strip())
@@ -368,7 +366,6 @@ def process_paq_file(file_bytes, filename):
         if is_recipe:
             s_rec = re.sub(r'\b(?:CProcessFile|COven|CZone|CRecipe|CProduct|CAnalysisParameters|CToleranceCurve)\b', '', s).strip()
             s_rec = re.sub(r'^[>#;\.,\|]+', '', s_rec).strip()
-            # Format Recipe nicely
             s_rec = re.sub(r'(WJ Flow)', r'\n\1', s_rec)
             s_rec = re.sub(r'(NB Top Temp)', r'\n\1', s_rec)
             s_rec = re.sub(r'(NB Bot temp)', r'\n\1', s_rec)
@@ -385,7 +382,6 @@ def process_paq_file(file_bytes, filename):
         else:
             if s_clean not in found_comments: found_comments.append(s_clean)
 
-    # Map Probes
     probe_locations = {}
     for p in found_probes:
         m = re.search(r'^#?([1-8])\s*[\(°C\)]*\s*[-:]?\s*(.+)', p)
@@ -413,7 +409,6 @@ def process_paq_file(file_bytes, filename):
     operator_name, company, site, clean_comments_text = parse_operator_and_metadata(found_comments)
     process_settings = "\n".join(found_recipes) if found_recipes else "Standard Recipe Parameters"
 
-    # 4. STRICT PRIORITY AUTOMATIC FURNACE SELECTION LOGIC
     recipe_corpus = f"{process_settings} {clean_comments_text} {filename}"
 
     furnace_id = "NB3"
@@ -442,7 +437,6 @@ def process_paq_file(file_bytes, filename):
     base_cfg = FURNACE_CONFIGS.get(furnace_id, FURNACE_CONFIGS["NB3"])
     cfg = dict(base_cfg)
 
-    # Threshold overrides based on rules
     if "RAD" in furnace_variant:
         cfg.update({"dryer_dwell_thresh_1": 150.0, "dryer_dwell_thresh_2": 175.0, "debinder_dwell_thresh": 200.0, "brazing_dwell_thresh_1": 550.0, "brazing_dwell_thresh_2": 583.0, "brazing_dwell_thresh_3": 591.0, "brazing_dwell_thresh_4": 600.0})
     elif "NB1" in furnace_variant:
@@ -509,27 +503,11 @@ else:
 
     df_m1, f_variant, cfg, zones, probe_cols = data1["df_master"], data1["furnace_variant"], data1["cfg"], data1["cfg"]["zones"], data1["probe_cols"]
 
-    # Calculate actual "Time in Furnace" based on line speed and physical length
     total_furnace_length = zones[-1]["start"] + zones[-1]["length"]
     furnace_duration_mins = total_furnace_length / data1['line_speed_mpm']
     furnace_duration_secs = int(furnace_duration_mins * 60)
 
     st.success(f"✓ File Loaded Successfully: **{data1['filename']}**")
-    
-    # Custom CSS for bigger metrics
-    st.markdown("""
-    <style>
-    div[data-testid="stMetricValue"] {
-        font-size: 2.8rem !important;
-        font-weight: 700 !important;
-    }
-    div[data-testid="stMetricLabel"] {
-        font-size: 1.1rem !important;
-        font-weight: 500 !important;
-        color: #a0aab2 !important;
-    }
-    </style>
-    """, unsafe_allow_html=True)
     
     m_col1, m_col2, m_col3 = st.columns(3)
     m_col1.metric("Confirmed Furnace", f_variant)
@@ -543,13 +521,11 @@ else:
         fig1 = go.Figure()
         custom_hover1 = np.stack((df_m1["Time_HHMMSS"], df_m1["Time_Seconds"], df_m1["Distance_Meters"]), axis=-1)
         for col in probe_cols:
-            fig1.add_trace(go.Scatter(x=df_m1["Distance_Meters"], y=df_m1[col], mode="lines", name=col, customdata=custom_hover1, hovertemplate="%{fullData.name}: %{y:.1f} °C<br>Time: %{customdata[0]} (%{customdata[1]}s)<br>Dist: %{x:.2f} m"))
+            fig1.add_trace(go.Scatter(x=df_m1["Distance_Meters"], y=df_m1[col], mode="lines", name=col, customdata=custom_hover1, hovertemplate="%{fullData.name}: %{y:.1f} °C<br>Time: %{customdata[0]} (%{customdata[1]}s)<br>Dist: %{x:.2f} m", line=dict(color=PROBE_COLORS.get(col))))
         for z in zones:
             z_color = GROUP_COLORS.get(z["group"], "rgba(200, 200, 200, 0.2)")
             fig1.add_vrect(x0=z["start"], x1=z["start"] + z["length"], fillcolor=z_color, layer="below", line_width=0.5, line_dash="dot", line_color="rgba(120, 120, 120, 0.4)", annotation_text=f"{z['num']}.{z['name']}", annotation_position="top left", annotation=dict(font_size=9, font_color="#222222", textangle=-90))
         fig1.add_hline(y=cfg["trigger_temp_brazing"], line_dash="dash", line_color="red", annotation_text=f"Brazing ({cfg['trigger_temp_brazing']}°C)", annotation_position="bottom right")
-        
-        # Limit X-Axis to end right after the furnace length
         fig1.update_layout(title=f"GLOBAL FURNACE PROFILE ({f_variant}): {data1['filename']}", xaxis=dict(title="Furnace Distance (Meters from Entrance)", range=[-1, total_furnace_length + 2]), yaxis_title="Temperature (°C)", hovermode="x unified", template="plotly_dark", height=550)
         st.plotly_chart(fig1, use_container_width=True)
 
@@ -559,12 +535,10 @@ else:
         for col in probe_cols:
             offset_m = data1["probe_start_info"][col]["Offset_Meters"]
             indiv_hover = np.stack((df_m1["Time_HHMMSS"], df_m1["Time_Seconds"], np.full(len(df_m1), offset_m)), axis=-1)
-            fig2.add_trace(go.Scatter(x=df_m1[f"Distance_{col}"], y=df_m1[col], mode="lines", name=f"{col} (+{offset_m:.2f}m)" if offset_m > 0 else f"{col} (Lead)", customdata=indiv_hover, hovertemplate="%{fullData.name}: %{y:.1f} °C<br>Indiv Dist: %{x:.2f} m<br>Time: %{customdata[0]}"))
+            fig2.add_trace(go.Scatter(x=df_m1[f"Distance_{col}"], y=df_m1[col], mode="lines", name=f"{col} (+{offset_m:.2f}m)" if offset_m > 0 else f"{col} (Lead)", customdata=indiv_hover, hovertemplate="%{fullData.name}: %{y:.1f} °C<br>Indiv Dist: %{x:.2f} m<br>Time: %{customdata[0]}", line=dict(color=PROBE_COLORS.get(col))))
         for z in zones:
             z_color = GROUP_COLORS.get(z["group"], "rgba(200, 200, 200, 0.2)")
             fig2.add_vrect(x0=z["start"], x1=z["start"] + z["length"], fillcolor=z_color, layer="below", line_width=0.5, line_dash="dot", line_color="rgba(120, 120, 120, 0.4)", annotation_text=f"{z['num']}.{z['name']}", annotation_position="top left", annotation=dict(font_size=9, font_color="#222222", textangle=-90))
-        
-        # Limit X-Axis to end right after the furnace length
         fig2.update_layout(title=f"INDIVIDUALLY ALIGNED PROFILES ({f_variant}): {data1['filename']}", xaxis=dict(title="Individual Probe Distance (Meters from Probe's 60°C Entry)", range=[-1, total_furnace_length + 2]), yaxis_title="Temperature (°C)", hovermode="x unified", template="plotly_dark", height=550)
         st.plotly_chart(fig2, use_container_width=True)
 
@@ -644,9 +618,8 @@ else:
     with tabs[3]:
         st.subheader("📈 Temperature Distribution Boxplot by Probe")
         fig_box = go.Figure()
-        colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f']
         for idx, col in enumerate(probe_cols):
-            fig_box.add_trace(go.Box(y=df_m1[col].dropna(), name=col, boxpoints='outliers', marker_color=colors[idx % len(colors)]))
+            fig_box.add_trace(go.Box(y=df_m1[col].dropna(), name=col, boxpoints='outliers', marker_color=PROBE_COLORS.get(col)))
         fig_box.update_layout(title="Temperature Distribution Across Probes", yaxis_title="Temperature (°C)", template="plotly_dark", height=500)
         st.plotly_chart(fig_box, use_container_width=True)
 
@@ -690,10 +663,9 @@ else:
                 df_m2 = data2["df_master"]
                 fig_comp = go.Figure()
                 for col in probe_cols:
-                    if col in df_m1.columns: fig_comp.add_trace(go.Scatter(x=df_m1["Distance_Meters"], y=df_m1[col], mode="lines", name=f"F1: {col}", line=dict(width=1.5)))
+                    if col in df_m1.columns: fig_comp.add_trace(go.Scatter(x=df_m1["Distance_Meters"], y=df_m1[col], mode="lines", name=f"F1: {col}", line=dict(color=PROBE_COLORS.get(col), width=1.5)))
                 for col in data2["probe_cols"]:
-                    if col in df_m2.columns: fig_comp.add_trace(go.Scatter(x=df_m2["Distance_Meters"], y=df_m2[col], mode="lines", name=f"F2: {col}", line=dict(dash='dash', width=1.5)))
+                    if col in df_m2.columns: fig_comp.add_trace(go.Scatter(x=df_m2["Distance_Meters"], y=df_m2[col], mode="lines", name=f"F2: {col}", line=dict(dash='dash', color=PROBE_COLORS.get(col), width=1.5)))
                 
-                # Limit X-Axis on comparison chart as well
                 fig_comp.update_layout(title=f"COMPARISON: {data1['filename']} vs {data2['filename']}", xaxis=dict(title="Distance (Meters)", range=[-1, total_furnace_length + 2]), yaxis_title="Temperature (°C)", hovermode="x unified", template="plotly_dark", height=600)
                 st.plotly_chart(fig_comp, use_container_width=True)
