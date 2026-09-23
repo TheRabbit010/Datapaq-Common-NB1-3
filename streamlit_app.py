@@ -188,6 +188,45 @@ def format_dwell_time(total_seconds):
     h, m = divmod(m, 60)
     return f"{int(h):02d}:{int(m):02d}:{int(s):02d}"
 
+def clean_paq_text(raw_text):
+    """Strips binary C++ class identifiers, network addresses, and cuts off at binary garbage blocks."""
+    if not raw_text:
+        return ""
+    
+    text = re.split(r'\\\\', raw_text)[0]
+    
+    # Split by common OLE tags / structural artifacts to prevent concatenations
+    parts = re.split(r'\b(?:CProbe|CSampleInterval|CAxisCustomUnits|CPaqfile|CByteDataArray|CProbeResult|CFurnaceRecipe|CZoom|CProbeMapEntry\w*|cho1-sv|CProcessFile|COven|CZone|CRecipe|CProduct|CAnalysisParameters|CAlarmParameters|CAlarmProbes|CAlarmParametersTime|CRiseFallRange|CTemperatureLimits|CTimeLimits|CCustomUnits|CLineSpeed|COvenStart|CProcessOptimisation|CToleranceCurve)\b', text)
+    
+    cleaned_parts = []
+    for p in parts:
+        p = p.strip()
+        p = re.sub(r'^[>#;\.,\|]+', '', p).strip() 
+        if len(p) < 3: continue
+        
+        # Stop completely if we hit the start of the binary gibberish block
+        if re.search(r'\b(Untitled NB(?:\#\d)? Entry|0Hl !@f|aaa\.\.\.)\b', p, re.IGNORECASE):
+            clean_segment = re.split(r'\b(Untitled NB(?:\#\d)? Entry|0Hl !@f|aaa\.\.\.)\b', p, flags=re.IGNORECASE)[0]
+            if clean_segment.strip():
+                cleaned_parts.append(clean_segment.strip())
+            break # Stop processing this chunk entirely
+            
+        # Standard junk filtering
+        if re.search(r'(.)\1{3,}', p): continue 
+        if re.search(r'[@^\$|~<>{}\[\]]{2,}', p): continue 
+        if re.search(r'^[0-9\W]+$', p): continue 
+        
+        # Remove specific zone headers
+        p = re.sub(r'\b(Untitled NB#\d Entry Zone|XFER|WatCool#\d|Exit curtain|AA\d+-\d+|AirCool#\d|Exit Dryer#\d|Exit Zone|Dryer#\d)\b', '', p, flags=re.IGNORECASE)
+        
+        p = re.sub(r'#\d+', '', p)
+        p = re.sub(r'\s+', ' ', p).strip()
+        
+        if p and len(p) >= 3:
+            cleaned_parts.append(p)
+            
+    return " ".join(cleaned_parts)
+
 def parse_operator_and_metadata(comments_list):
     """Extract Operator, Company, Site and Clean the Notes"""
     combined = " ".join(comments_list)
@@ -208,7 +247,7 @@ def parse_operator_and_metadata(comments_list):
         if token != "N/A":
             clean_notes = re.sub(rf'\b{re.escape(token)}\b', '', clean_notes, flags=re.IGNORECASE)
 
-    clean_notes = re.sub(r'\s+', ' ', clean_notes).strip()
+    clean_notes = clean_paq_text(clean_notes)
     return op, comp, site, clean_notes if clean_notes else "N/A"
 
 @st.cache_data
@@ -298,38 +337,24 @@ def process_paq_file(file_bytes, filename):
         if re.search(r'\.(ovn|prd|pro|rec|paq|jpg|png|bmp)\b', s, re.IGNORECASE): continue
         if re.search(r'\\Users\\|Desktop', s, re.IGNORECASE): continue
         
-        # Aggressive split by C++ Class names to prevent joined garbage text
-        parts = re.split(r'\b(?:CProbe|CSampleInterval|CAxisCustomUnits|CPaqfile|CByteDataArray|CProbeResult|CFurnaceRecipe|CZoom|CProbeMapEntry\w*|cho1-sv|CProcessFile|COven|CZone|CRecipe|CProduct|CAnalysisParameters|CAlarmParameters|CAlarmProbes|CAlarmParametersTime|CRiseFallRange|CTemperatureLimits|CTimeLimits|CCustomUnits|CLineSpeed|COvenStart|CProcessOptimisation|CToleranceCurve)\b', s)
+        # Route recipe strings directly without heavy cleaning
+        is_recipe = re.search(r'\b(O2 Exit|ppm|CV speed|mm/min|N2 Flow|WJ Flow|Top Temp|Bot temp|SP1|SP2\s*==>)\b', s, re.IGNORECASE)
+        if is_recipe:
+            s_rec = re.sub(r'\b(?:CProcessFile|COven|CZone|CRecipe|CProduct|CAnalysisParameters|CToleranceCurve)\b', '', s).strip()
+            s_rec = re.sub(r'^[>#;\.,\|]+', '', s_rec).strip()
+            if s_rec and s_rec not in found_recipes: 
+                found_recipes.append(s_rec)
+            continue
+            
+        # Clean probes and comments
+        s_clean = clean_paq_text(s)
+        if not s_clean: continue
         
-        for p in parts:
-            p = p.strip()
-            p = re.sub(r'^[>#;\.,\|]+', '', p).strip() 
-            if len(p) < 3: continue
-            
-            # Reject Gibberish & Binary Fragments
-            if re.search(r'(.)\1{3,}', p): continue 
-            if re.search(r'^[0-9\W]+$', p): continue 
-            if re.search(r'[@^\$|~<>{}\[\]]{2,}', p): continue 
-            if len(p) > 20 and ' ' not in p: continue
-            if len(p) > 30 and sum(c.isalpha() for c in p)/len(p) < 0.4: continue
-            
-            # Remove Zone setup headers
-            p = re.sub(r'\b(Untitled NB#\d Entry Zone|XFER|WatCool#\d|Exit curtain|AA\d+-\d+|AirCool#\d|Exit Dryer#\d|Exit Zone|Dryer#\d)\b', '', p, flags=re.IGNORECASE)
-            
-            p = re.sub(r'#\d+', '', p)
-            p = re.sub(r'\s+', ' ', p).strip()
-            if not p: continue
-            
-            # Classify Routing
-            is_recipe = re.search(r'\b(O2 Exit|ppm|CV speed|mm/min|N2 Flow|WJ Flow|Top Temp|Bot temp|SP1|SP2\s*==>)\b', p, re.IGNORECASE)
-            is_probe = re.search(r'\b(cooler|drill&insert|inside H/D)\b', p, re.IGNORECASE)
-            
-            if is_recipe:
-                if p not in found_recipes: found_recipes.append(p)
-            elif is_probe:
-                if p not in found_probes: found_probes.append(p)
-            else:
-                if p not in found_comments: found_comments.append(p)
+        is_probe = re.search(r'\b(cooler|drill&insert|inside H/D)\b', s_clean, re.IGNORECASE)
+        if is_probe:
+            if s_clean not in found_probes: found_probes.append(s_clean)
+        else:
+            if s_clean not in found_comments: found_comments.append(s_clean)
 
     # Map Probes
     probe_locations = {}
@@ -509,7 +534,7 @@ else:
             m1.text_input("👤 Operator Name", data1["operator_name"], disabled=True)
             m2.text_input("🏢 Company", data1["company"], disabled=True)
             m3.text_input("📍 Site", data1["site"], disabled=True)
-            st.text_area("💬 Additional Comments / Notes", data1["operator_comment"], height=200)
+            st.text_area("💬 Additional Comments / Notes", data1["operator_comment"], height=160)
             st.text_area("⚙️ Recipe / Process Settings", data1["process_settings"], height=200)
 
         with col_b:
