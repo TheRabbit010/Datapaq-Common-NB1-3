@@ -1,49 +1,144 @@
-import os
-import zlib
-import struct
 import io
+import os
 import re
+import struct
+import zlib
 import numpy as np
+import olefile
 import pandas as pd
-from PIL import Image
+import plotly.graph_objects as go
 import streamlit as st
+from PIL import Image
 
-# ตั้งค่าหน้าเว็บ Streamlit
-st.set_page_config(page_title="Datapaq .PAQ File Processor", layout="wide")
-
-# ตรวจสอบและติดตั้ง olefile อัตโนมัติ (หากรันในระบบที่ไม่มี)
-try:
-    import olefile
-except ImportError:
-    import subprocess
-    import sys
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "olefile"])
-    import olefile
-
-# ตั้งค่าการแสดงผลทศนิยมของ Pandas
-pd.options.display.float_format = '{:.1f}'.format
-
-# --- หัวข้อแอปพลิเคชัน ---
-st.title("🔥 Datapaq .PAQ File Processor")
-st.markdown("แปลงไฟล์ดึงข้อมูลอุณหภูมิเตาอบอัตโนมัติ รองรับไฟล์ประเภท binary `.paq`")
-st.divider()
-
-# --- แถบตั้งค่าด้านข้าง (Sidebar) ---
-st.sidebar.header("⚙️ Configuration")
-LINE_SPEED_MPM = st.sidebar.number_input(
-    "Line Speed (Meters per Minute)", 
-    min_value=0.1, 
-    max_value=10.0, 
-    value=1.2700, 
-    step=0.01,
-    format="%.4f"
+# ==============================================================================
+# STREAMLIT PAGE CONFIGURATION
+# ==============================================================================
+st.set_page_config(
+    page_title="Datapaq .PAQ Analyzer & Furnace Profiler",
+    page_icon="🔥",
+    layout="wide"
 )
 
-# --- ส่วนอัปโหลดไฟล์ (จาก Cell 1) ---
-st.subheader("📁 Step 1: Upload Datapaq File")
-uploaded_file = st.file_uploader("ลากและวางไฟล์ .paq ที่นี่", type=["paq"])
+# Group Color Definitions for Plotly Graphs
+GROUP_COLORS = {
+    "Dryer": "rgba(255, 235, 156, 0.30)",
+    "Debinder": "rgba(255, 199, 119, 0.30)",
+    "Heating": "rgba(255, 160, 160, 0.25)",
+    "Cooling": "rgba(173, 216, 230, 0.30)"
+}
 
-# ฟังก์ชันถอดรหัส Stream (จาก Cell 2)
+# Furnace Configurations Database (NB1, NB2, NB3)
+FURNACE_CONFIGS = {
+    "NB1": {
+        "line_speed_mpm": 1.400,
+        "zones": [
+            {"num": 1, "name": "Dryer Z#1", "start": 0.00, "length": 3.15, "group": "Dryer"},
+            {"num": 2, "name": "Dryer Z#2", "start": 3.15, "length": 3.13, "group": "Dryer"},
+            {"num": 3, "name": "EXT Dryer", "start": 6.27, "length": 0.70, "group": "Dryer"},
+            {"num": 4, "name": "ENT DB", "start": 6.97, "length": 0.67, "group": "Debinder"},
+            {"num": 5, "name": "DB Z#1", "start": 7.64, "length": 3.13, "group": "Debinder"},
+            {"num": 6, "name": "DB Z#2", "start": 10.77, "length": 2.60, "group": "Debinder"},
+            {"num": 7, "name": "DB Z#3", "start": 13.37, "length": 2.60, "group": "Debinder"},
+            {"num": 8, "name": "DB Z#4", "start": 15.97, "length": 3.13, "group": "Debinder"},
+            {"num": 9, "name": "XFER#1", "start": 19.10, "length": 2.71, "group": "Heating"},
+            {"num": 10, "name": "Z#1", "start": 21.81, "length": 3.14, "group": "Heating"},
+            {"num": 11, "name": "Z#2", "start": 24.95, "length": 2.68, "group": "Heating"},
+            {"num": 12, "name": "Z#3", "start": 27.63, "length": 2.72, "group": "Heating"},
+            {"num": 13, "name": "Z#4", "start": 30.35, "length": 2.04, "group": "Heating"},
+            {"num": 14, "name": "Z#5", "start": 32.39, "length": 2.00, "group": "Heating"},
+            {"num": 15, "name": "Z#6", "start": 34.39, "length": 2.00, "group": "Heating"},
+            {"num": 16, "name": "Z#7", "start": 36.39, "length": 2.29, "group": "Heating"},
+            {"num": 17, "name": "WatCool#1", "start": 38.68, "length": 2.39, "group": "Cooling"},
+            {"num": 18, "name": "WatCool#2", "start": 41.07, "length": 1.90, "group": "Cooling"},
+            {"num": 19, "name": "Exit curtain box", "start": 42.97, "length": 1.90, "group": "Cooling"},
+            {"num": 20, "name": "XFER#2", "start": 44.87, "length": 0.60, "group": "Cooling"},
+            {"num": 21, "name": "Air Cool#1", "start": 45.47, "length": 1.25, "group": "Cooling"},
+            {"num": 22, "name": "Air Cool#2", "start": 46.72, "length": 1.25, "group": "Cooling"},
+            {"num": 23, "name": "Exit", "start": 47.97, "length": 1.85, "group": "Cooling"},
+        ],
+        "stages": [
+            {"Stage": "Dryer", "Start (m)": 0.00, "End (m)": 6.28, "thresh": 200.0},
+            {"Stage": "Debinder", "Start (m)": 7.64, "End (m)": 19.10, "thresh": 300.0},
+            {"Stage": "Brazing", "Start (m)": 21.81, "End (m)": 42.97, "thresh": 577.0},
+        ],
+        "trigger_temp_brazing": 577.0,
+        "dryer_dwell_thresh": 200.0,
+        "debinder_dwell_thresh": 300.0,
+        "brazing_dwell_thresh_1": 550.0,
+        "brazing_dwell_thresh_2": 577.0,
+        "brazing_dwell_thresh_3": 591.0,
+    },
+    "NB2": {
+        "line_speed_mpm": 1.560,
+        "zones": [
+            {"num": 1, "name": "DryOff-Z#1", "start": 0.00, "length": 2.80, "group": "Dryer"},
+            {"num": 2, "name": "DryOff-Z#2", "start": 2.80, "length": 2.80, "group": "Dryer"},
+            {"num": 3, "name": "Xfer1", "start": 5.60, "length": 3.13, "group": "Dryer"},
+            {"num": 4, "name": "Z#1", "start": 8.73, "length": 3.60, "group": "Heating"},
+            {"num": 5, "name": "Z#2", "start": 12.33, "length": 2.70, "group": "Heating"},
+            {"num": 6, "name": "Z#3", "start": 15.03, "length": 2.40, "group": "Heating"},
+            {"num": 7, "name": "Z#4", "start": 17.43, "length": 2.10, "group": "Heating"},
+            {"num": 8, "name": "Z#5", "start": 19.53, "length": 2.30, "group": "Heating"},
+            {"num": 9, "name": "Z#6", "start": 21.83, "length": 1.90, "group": "Heating"},
+            {"num": 10, "name": "Z#7", "start": 23.73, "length": 2.20, "group": "Heating"},
+            {"num": 11, "name": "Xfer2", "start": 25.93, "length": 0.80, "group": "Heating"},
+            {"num": 12, "name": "Watcol1", "start": 26.73, "length": 1.75, "group": "Cooling"},
+            {"num": 13, "name": "Watcol2", "start": 28.48, "length": 1.85, "group": "Cooling"},
+            {"num": 14, "name": "Exit curtain box", "start": 30.33, "length": 2.30, "group": "Cooling"},
+            {"num": 15, "name": "Airc1", "start": 32.63, "length": 1.25, "group": "Cooling"},
+            {"num": 16, "name": "Airc2", "start": 33.88, "length": 1.25, "group": "Cooling"},
+            {"num": 17, "name": "Exit", "start": 35.13, "length": 1.80, "group": "Cooling"},
+        ],
+        "stages": [
+            {"Stage": "Dryer", "Start (m)": 0.00, "End (m)": 5.60, "thresh": 200.0},
+            {"Stage": "Brazing", "Start (m)": 8.73, "End (m)": 30.33, "thresh": 577.0},
+        ],
+        "trigger_temp_brazing": 577.0,
+        "dryer_dwell_thresh": 200.0,
+        "debinder_dwell_thresh": None,
+        "brazing_dwell_thresh_1": 550.0,
+        "brazing_dwell_thresh_2": 577.0,
+        "brazing_dwell_thresh_3": 591.0,
+    },
+    "NB3": {
+        "line_speed_mpm": 1.270,
+        "zones": [
+            {"num": 1, "name": "XFER", "start": 0.00, "length": 0.10, "group": "Dryer"},
+            {"num": 2, "name": "Dryer#1", "start": 0.10, "length": 1.85, "group": "Dryer"},
+            {"num": 3, "name": "Dryer#2", "start": 1.95, "length": 1.85, "group": "Dryer"},
+            {"num": 4, "name": "Dryer#3", "start": 3.80, "length": 1.95, "group": "Dryer"},
+            {"num": 5, "name": "XFER#1", "start": 5.75, "length": 3.39, "group": "Dryer"},
+            {"num": 6, "name": "Z#1", "start": 9.14, "length": 3.60, "group": "Heating"},
+            {"num": 7, "name": "Z#2", "start": 12.74, "length": 2.75, "group": "Heating"},
+            {"num": 8, "name": "Z#3", "start": 15.49, "length": 2.30, "group": "Heating"},
+            {"num": 9, "name": "Z#4", "start": 17.79, "length": 2.10, "group": "Heating"},
+            {"num": 10, "name": "Z#5", "start": 19.89, "length": 2.10, "group": "Heating"},
+            {"num": 11, "name": "Z#6", "start": 21.99, "length": 1.90, "group": "Heating"},
+            {"num": 12, "name": "Z#7", "start": 23.89, "length": 1.63, "group": "Heating"},
+            {"num": 13, "name": "WatCoo#1", "start": 25.52, "length": 2.56, "group": "Cooling"},
+            {"num": 14, "name": "WatCoo#2", "start": 28.08, "length": 1.90, "group": "Cooling"},
+            {"num": 15, "name": "Exit curtain box", "start": 29.98, "length": 1.90, "group": "Cooling"},
+            {"num": 16, "name": "XFER#2", "start": 31.88, "length": 0.60, "group": "Cooling"},
+            {"num": 17, "name": "AirCoo#1", "start": 32.48, "length": 1.25, "group": "Cooling"},
+            {"num": 18, "name": "AirCoo#2", "start": 33.73, "length": 1.25, "group": "Cooling"},
+            {"num": 19, "name": "Exit", "start": 34.98, "length": 1.85, "group": "Cooling"},
+        ],
+        "stages": [
+            {"Stage": "Dryer", "Start (m)": 0.00, "End (m)": 5.75, "thresh": 200.0},
+            {"Stage": "Brazing", "Start (m)": 9.14, "End (m)": 29.98, "thresh": 577.0},
+        ],
+        "trigger_temp_brazing": 577.0,
+        "dryer_dwell_thresh": 200.0,
+        "debinder_dwell_thresh": None,
+        "brazing_dwell_thresh_1": 550.0,
+        "brazing_dwell_thresh_2": 577.0,
+        "brazing_dwell_thresh_3": 591.0,
+    }
+}
+
+# ==============================================================================
+# HELPER FUNCTIONS FOR PAQ PARSING
+# ==============================================================================
 def decompress_stream(ole_obj, stream_name):
     try:
         raw_data = ole_obj.openstream(stream_name).read()
@@ -55,13 +150,13 @@ def decompress_stream(ole_obj, stream_name):
     except Exception:
         return None
 
-# ฟังก์ชันดึงชุดข้อมูล Probe (จาก Cell 2)
 def extract_probe_series_autonomously(decomp_bytes):
     best_series = []
     for offset in range(0, min(12000, len(decomp_bytes) - 800), 1):
         rem = len(decomp_bytes) - offset
         cnt = rem // 8
-        if cnt < 500: continue
+        if cnt < 500:
+            continue
         try:
             vals = struct.unpack(f"<{cnt}d", decomp_bytes[offset : offset + cnt * 8])
         except Exception:
@@ -77,143 +172,490 @@ def extract_probe_series_autonomously(decomp_bytes):
                 if len(clean_vals) > 500:
                     if glitch_count <= 5:
                         clean_vals.append(clean_vals[-1] if clean_vals else 0.0)
-                    else: break
-                elif glitch_count > 3: clean_vals = []
+                    else:
+                        break
+                elif glitch_count > 3:
+                    clean_vals = []
 
         if len(clean_vals) > len(best_series) and max(clean_vals) > 150.0:
             best_series = clean_vals
 
     return best_series
 
+def format_dwell_time(total_seconds):
+    if pd.isna(total_seconds) or total_seconds == 0:
+        return "00:00:00"
+    m, s = divmod(total_seconds, 60)
+    h, m = divmod(m, 60)
+    return f"{int(h):02d}:{int(m):02d}:{int(s):02d}"
 
-# --- ส่วนประมวลผลข้อมูลหลักเมื่ออัปโหลดไฟล์ (จาก Cell 2) ---
-if uploaded_file is not None:
-    st.success(f"✓ Success! Datapaq file '{uploaded_file.name}' loaded into memory.")
-    st.divider()
-    
-    st.subheader("⚙️ Step 2: Main Processing & Extraction")
-    
-    with st.spinner("กำลังประมวลผลและวิเคราะห์รหัสไฟล์..."):
+@st.cache_data
+def process_paq_file(file_bytes, filename):
+    ole_bytes = io.BytesIO(file_bytes)
+    ole = olefile.OleFileIO(ole_bytes)
+
+    # 1. Probe Streams Processing
+    probe_streams = [s for s in ole.listdir() if len(s) >= 4 and s[0] == 'Paqfiles' and s[2] == 'ProbeResults']
+    probe_streams = sorted(probe_streams, key=lambda x: x[-1])
+
+    all_probes = {}
+    for stream_path in probe_streams:
+        stream_name = "/".join(stream_path)
+        probe_folder = stream_path[-1]
+        probe_num = int(''.join(filter(str.isdigit, probe_folder))) + 1 if any(c.isdigit() for c in probe_folder) else len(all_probes) + 1
+        col_name = f"PB#{probe_num}"
+
+        d = decompress_stream(ole, stream_name)
+        if d:
+            series = extract_probe_series_autonomously(d)
+            if series:
+                all_probes[col_name] = series
+
+    if not all_probes:
+        return None
+
+    max_samples = max(len(v) for v in all_probes.values())
+    aligned_probes = {k: (v + [np.nan] * (max_samples - len(v)) if len(v) < max_samples else v) for k, v in all_probes.items()}
+
+    df_master = pd.DataFrame(aligned_probes)
+    df_master.insert(0, "Time_Seconds", range(len(df_master)))
+    df_master.insert(1, "Time_HHMMSS", pd.to_datetime(df_master["Time_Seconds"], unit='s').dt.strftime('%H:%M:%S'))
+
+    probe_cols = [col for col in df_master.columns if col.startswith("PB#")]
+
+    # 2. Entrance Detection (60°C for 15s)
+    SUSTAINED_SECONDS = 15
+    probe_start_secs = {}
+
+    for col in probe_cols:
+        is_p60 = (df_master[col] >= 60.0)
+        valid_p_mask = is_p60.copy()
+        for i in range(1, SUSTAINED_SECONDS):
+            valid_p_mask = valid_p_mask & is_p60.shift(-i, fill_value=False)
+
+        p_sec = int(df_master[valid_p_mask].iloc[0]["Time_Seconds"]) if valid_p_mask.any() else 0
+        probe_start_secs[col] = p_sec
+
+    valid_starts = [sec for sec in probe_start_secs.values() if sec > 0]
+    detected_start_sec = min(valid_starts) if valid_starts else 0
+    first_probe_name = [k for k, v in probe_start_secs.items() if v == detected_start_sec][0] if valid_starts else probe_cols[0]
+
+    start_row = df_master[df_master["Time_Seconds"] == detected_start_sec].iloc[0]
+    detected_start_hhmmss = start_row["Time_HHMMSS"]
+
+    # 3. Metadata, Comments, Image Extraction
+    found_comments, found_settings = [], []
+    embedded_img = None
+
+    for stream_path in ole.listdir():
+        s_name = "/".join(stream_path)
         try:
-            # แปลงอ็อบเจกต์ที่อัปโหลดมาให้เป็น Byte Stream เพื่อให้ olefile อ่านได้
-            file_bytes = uploaded_file.read()
-            ole_io = io.BytesIO(file_bytes)
-            
-            ole = olefile.OleFileIO(ole_io)
-            probe_streams = [s for s in ole.listdir() if len(s) >= 4 and s[0] == 'Paqfiles' and s[2] == 'ProbeResults']
-            probe_streams = sorted(probe_streams, key=lambda x: x[-1])
+            raw_b = ole.openstream(s_name).read()
+            data_b = raw_b
+            if raw_b.startswith(b'ZLIB') or b'x\x9c' in raw_b[:20]:
+                try:
+                    z_data = raw_b[8:] if raw_b.startswith(b'ZLIB') else raw_b
+                    data_b = zlib.decompress(z_data)
+                except Exception:
+                    try:
+                        data_b = zlib.decompress(z_data, -zlib.MAX_WBITS)
+                    except Exception:
+                        data_b = raw_b
 
-            all_probes = {}
-            
-            # สร้างคอลัมน์แสดงสถานะการถอดรหัสแบบ Real-time บนหน้าเว็บ
-            status_container = st.empty()
-            extracted_logs = []
+            if embedded_img is None and len(data_b) > 500:
+                for header, format_type in [(b'\x89PNG\r\n\x1a\n', 'PNG'), (b'\xff\xd8\xff', 'JPEG'), (b'BM', 'BMP')]:
+                    idx = data_b.find(header)
+                    if idx != -1:
+                        try:
+                            embedded_img = Image.open(io.BytesIO(data_b[idx:]))
+                            break
+                        except Exception:
+                            pass
 
-            for stream_path in probe_streams:
-                stream_name = "/".join(stream_path)
-                probe_folder = stream_path[-1]
-                probe_num = int(''.join(filter(str.isdigit, probe_folder))) + 1 if any(c.isdigit() for c in probe_folder) else len(all_probes) + 1
-                col_name = f"PB#{probe_num}"
+            if any(k in s_name.lower() for k in ["comment", "notes", "header"]):
+                ascii_strings = re.findall(rb'[\x20-\x7E]{4,}', data_b)
+                clean_text = " ".join([s.decode('ascii', errors='ignore') for s in ascii_strings])
+                if clean_text: found_comments.append(clean_text)
 
-                d = decompress_stream(ole, stream_name)
-                if d:
-                    series = extract_probe_series_autonomously(d)
-                    if series:
-                        all_probes[col_name] = series
-                        extracted_logs.append(f"✓ {col_name}: Extracted {len(series)} raw samples")
-            
-            # พิมพ์บอกสถานะล็อกการดึงข้อมูลบนหน้าเว็บ
-            with st.expander("ดูบันทึกการดึงข้อมูลตำแหน่งหัววัด (Extraction Logs)"):
-                for log in extracted_logs:
-                    st.text(log)
+            if any(k in s_name.lower() for k in ["setting", "recipe", "process"]):
+                ascii_strings = re.findall(rb'[\x20-\x7E]{4,}', data_b)
+                clean_text = " ".join([s.decode('ascii', errors='ignore') for s in ascii_strings])
+                if clean_text: found_settings.append(clean_text)
 
-            if all_probes:
-                max_samples = max(len(v) for v in all_probes.values())
-                aligned_probes = {k: (v + [np.nan] * (max_samples - len(v)) if len(v) < max_samples else v) for k, v in all_probes.items()}
+        except Exception:
+            continue
 
-                df_master = pd.DataFrame(aligned_probes)
-                df_master.insert(0, "Time_Seconds", range(len(df_master)))
-                df_master.insert(1, "Time_HHMMSS", pd.to_datetime(df_master["Time_Seconds"], unit='s').dt.strftime('%H:%M:%S'))
+    operator_comment = "\n".join(set(found_comments[:3])) if found_comments else "N/A"
+    process_settings = "\n".join(set(found_settings[:3])) if found_settings else "N/A"
 
-                probe_cols = [col for col in df_master.columns if col.startswith("PB#")]
-
-                # --- ตรวจจับทางเข้าเตาอบคงที่ที่อุณหภูมิ 60°C เป็นเวลา 15 วินาที ---
-                SUSTAINED_SECONDS = 15
-                probe_start_secs = {}
-
+    # Probe Locations Extraction
+    probe_locations = {}
+    for stream_path in ole.listdir():
+        s_name = "/".join(stream_path)
+        if "probelocation" in s_name.lower() or "probe" in s_name.lower():
+            try:
+                raw_b = ole.openstream(s_name).read()
+                data_b = raw_b[8:] if raw_b.startswith(b'ZLIB') else raw_b
+                try: decomp = zlib.decompress(data_b)
+                except: decomp = raw_b
+                ascii_text = " ".join([s.decode('ascii', errors='ignore') for s in re.findall(rb'[\x20-\x7E]{3,}', decomp)])
                 for col in probe_cols:
-                    is_p60 = (df_master[col] >= 60.0)
-                    valid_p_mask = is_p60.copy()
-                    for i in range(1, SUSTAINED_SECONDS):
-                        valid_p_mask = valid_p_mask & is_p60.shift(-i, fill_value=False)
+                    p_num = col.replace("PB#", "")
+                    m = re.search(rf'Probe\s*{p_num}[:\s\-_]+([A-Za-z0-9\s/_\-\.]+)', ascii_text, re.IGNORECASE)
+                    if m and col not in probe_locations:
+                        probe_locations[col] = m.group(1).strip()
+            except Exception:
+                continue
 
-                    if valid_p_mask.any():
-                        p_sec = int(df_master[valid_p_mask].iloc[0]["Time_Seconds"])
-                    else:
-                        p_sec = 0
-                    probe_start_secs[col] = p_sec
+    # 4. Furnace Identification
+    furnace_id = "NB3"
+    recipe_corpus = f"{process_settings} {operator_comment} {filename}"
+    f_match = re.search(r'NB\s*Furnace\s*0?([123])\b|NB\s*#?\s*0?([123])\b|NB-0?([123])\b', recipe_corpus, re.IGNORECASE)
+    if f_match:
+        num = [g for g in f_match.groups() if g is not None][0]
+        furnace_id = f"NB{num}"
 
-                valid_starts = [sec for sec in probe_start_secs.values() if sec > 0]
-                detected_start_sec = min(valid_starts) if valid_starts else 0
+    cfg = FURNACE_CONFIGS.get(furnace_id, FURNACE_CONFIGS["NB3"])
+    line_speed_mpm = cfg["line_speed_mpm"]
 
-                first_probe_name = [k for k, v in probe_start_secs.items() if v == detected_start_sec][0] if valid_starts else probe_cols[0]
+    # Speed override from recipe
+    cv_sp_matches = re.findall(r'CV\s*SP\s*[:=]?\s*(\d{3,4})\s*(?:mm/\s*min|mm)?', recipe_corpus, re.IGNORECASE)
+    if cv_sp_matches:
+        last_speed = float(cv_sp_matches[-1])
+        if 800.0 <= last_speed <= 2500.0:
+            line_speed_mpm = last_speed / 1000.0
 
-                start_row = df_master[df_master["Time_Seconds"] == detected_start_sec].iloc[0]
-                detected_start_hhmmss = start_row["Time_HHMMSS"]
+    df_master["Distance_Meters"] = ((df_master["Time_Seconds"] - detected_start_sec) / 60.0) * line_speed_mpm
 
-                # คำนวณระยะทาง
-                df_master["Distance_Meters"] = ((df_master["Time_Seconds"] - detected_start_sec) / 60.0) * LINE_SPEED_MPM
+    probe_start_info = {}
+    for col in probe_cols:
+        p_sec = probe_start_secs[col]
+        offset_sec = p_sec - detected_start_sec
+        offset_m = (offset_sec / 60.0) * line_speed_mpm
+        df_master[f"Distance_{col}"] = ((df_master["Time_Seconds"] - p_sec) / 60.0) * line_speed_mpm
+        p_hhmmss = df_master[df_master["Time_Seconds"] == p_sec].iloc[0]["Time_HHMMSS"] if p_sec < len(df_master) else "00:00:00"
 
-                probe_start_info = {}
-                for col in probe_cols:
-                    p_sec = probe_start_secs[col]
-                    offset_sec = p_sec - detected_start_sec
-                    offset_m = (offset_sec / 60.0) * LINE_SPEED_MPM
+        probe_start_info[col] = {
+            "Start_Sec": p_sec,
+            "Start_HHMMSS": p_hhmmss,
+            "Offset_Sec": offset_sec,
+            "Offset_Meters": round(offset_m, 2),
+            "Is_First": (col == first_probe_name)
+        }
 
-                    df_master[f"Distance_{col}"] = ((df_master["Time_Seconds"] - p_sec) / 60.0) * LINE_SPEED_MPM
+    return {
+        "filename": filename,
+        "df_master": df_master,
+        "probe_cols": probe_cols,
+        "furnace_id": furnace_id,
+        "line_speed_mpm": line_speed_mpm,
+        "detected_start_sec": detected_start_sec,
+        "detected_start_hhmmss": detected_start_hhmmss,
+        "first_probe_name": first_probe_name,
+        "operator_comment": operator_comment,
+        "process_settings": process_settings,
+        "probe_locations": probe_locations,
+        "probe_start_info": probe_start_info,
+        "embedded_img": embedded_img
+    }
 
-                    p_hhmmss = df_master[df_master["Time_Seconds"] == p_sec].iloc[0]["Time_HHMMSS"] if p_sec < len(df_master) else "00:00:00"
+# ==============================================================================
+# STREAMLIT UI LAYOUT & MAIN APPLICATION
+# ==============================================================================
+st.title("🔥 Datapaq .PAQ Furnace Profiler & Analyzer")
+st.markdown("Automated thermal profile extraction, zone metrics, and multi-file comparison.")
 
-                    probe_start_info[col] = {
-                        "Start_Sec": p_sec,
-                        "Start_HHMMSS": p_hhmmss,
-                        "Offset_Sec": offset_sec,
-                        "Offset_Meters": round(offset_m, 2),
-                        "Is_First": (col == first_probe_name)
-                    }
+# Sidebar Upload Controls
+with st.sidebar:
+    st.header("📁 File Upload")
+    uploaded_file1 = st.file_uploader("Upload Main .PAQ File", type=["paq"], key="paq1")
+    
+    st.markdown("---")
+    st.header("⚖️ Comparison Option")
+    uploaded_file2 = st.file_uploader("Upload 2nd .PAQ File (Optional)", type=["paq"], key="paq2")
 
-                # --- การแปรผลข้อมูลในหน้าแดชบอร์ด (Streamlit UI elements) ---
-                st.success("🎉 ประมวลผลข้อมูลหลักสำเร็จแล้ว!")
-                
-                # แสดงการ์ดข้อมูลสรุป (Metrics)
-                col1, col2, col3 = st.columns(3)
-                col1.metric("จุดเริ่มต้นเข้าเตาอบที่พบ (Time)", f"{detected_start_hhmmss}")
-                col2.metric("เวลาเริ่มต้น (วินาที)", f"{detected_start_sec} s")
-                col3.metric("หัววัดหลักที่เข้าเตาคนแรก", f"{first_probe_name}")
-
-                # แสดงตารางประวัติเวลาออฟเซ็ตของแต่ละหัววัด
-                st.subheader("📊 ข้อมูลตำแหน่งการเริ่มวัดของแต่ละหัววัด (Probe Start Info)")
-                df_info = pd.DataFrame(probe_start_info).T
-                st.dataframe(df_info, use_container_width=True)
-
-                # แสดงตัวอย่างตารางผลลัพธ์หลัก (Master DataFrame)
-                st.subheader("📋 ตารางข้อมูล Master Data (ตัวอย่าง 100 แถวแรก)")
-                st.dataframe(df_master.head(100), use_container_width=True)
-                
-                # ปุ่มดาวน์โหลดข้อมูลเป็นไฟล์ Excel/CSV
-                csv_data = df_master.to_csv(index=False).encode('utf-8')
-                st.download_button(
-                    label="📥 ดาวน์โหลดไฟล์ Master Data เป็น CSV",
-                    data=csv_data,
-                    file_name=f"Processed_{uploaded_file.name}.csv",
-                    mime="text/csv"
-                )
-
-            else:
-                st.error("❌ ไม่พบข้อมูลหัววัด (Probe Streams) ที่สามารถใช้งานได้ในไฟล์นี้")
-
-        except Exception as e:
-            st.error(f"❌ เกิดข้อผิดพลาดในการอ่านโครงสร้างไฟล์: {str(e)}")
-
+if not uploaded_file1:
+    st.info("👈 Please upload a `.paq` binary file using the sidebar to begin analysis.")
 else:
-    st.info("💡 รอการอัปโหลดไฟล์ไฟล์ .paq เพื่อเริ่มต้นการทำงาน...")
+    # Process Main PAQ File
+    data1 = process_paq_file(uploaded_file1.getvalue(), uploaded_file1.name)
+    if not data1:
+        st.error("❌ Failed to parse valid probe temperature streams from the uploaded file.")
+        st.stop()
+
+    df_m1 = data1["df_master"]
+    f_id = data1["furnace_id"]
+    cfg = FURNACE_CONFIGS[f_id]
+    zones = cfg["zones"]
+    probe_cols = data1["probe_cols"]
+
+    # Top Metrics Banner
+    st.success(f"✓ File Loaded Successfully: **{data1['filename']}**")
+    m_col1, m_col2, m_col3, m_col4 = st.columns(4)
+    m_col1.metric("Confirmed Furnace", f_id)
+    m_col2.metric("Conveyor Speed", f"{data1['line_speed_mpm']:.3f} m/min")
+    m_col3.metric("Lead Probe Entrance", f"{data1['first_probe_name']} @ {data1['detected_start_hhmmss']}")
+    m_col4.metric("Total Duration", f"{len(df_m1)}s (~{len(df_m1)/60:.1f} min)")
+
+    # Main Tabs Navigation
+    tabs = st.tabs([
+        "📊 Profile Graphs",
+        "📝 Metadata & Probe Map",
+        "🏭 Zone & Stage Summary",
+        "📈 Statistics & Boxplots",
+        "💾 Master Dataset & Export",
+        "⚖️ Compare Files"
+    ])
+
+    # --------------------------------------------------------------------------
+    # TAB 1: PROFILE GRAPHS
+    # --------------------------------------------------------------------------
+    with tabs[0]:
+        st.subheader("Global Furnace Profile (Distance Aligned)")
+        
+        # Chart 1: Global Profile
+        fig1 = go.Figure()
+        custom_hover1 = np.stack((df_m1["Time_HHMMSS"], df_m1["Time_Seconds"], df_m1["Distance_Meters"]), axis=-1)
+
+        for col in probe_cols:
+            fig1.add_trace(go.Scatter(
+                x=df_m1["Distance_Meters"], y=df_m1[col], mode="lines", name=col,
+                customdata=custom_hover1,
+                hovertemplate="%{fullData.name}: %{y:.1f} °C<br>Time: %{customdata[0]} (%{customdata[1]}s)<br>Dist: %{x:.2f} m"
+            ))
+
+        for z in zones:
+            z_color = GROUP_COLORS.get(z["group"], "rgba(200, 200, 200, 0.2)")
+            fig1.add_vrect(
+                x0=z["start"], x1=z["start"] + z["length"], fillcolor=z_color, layer="below",
+                line_width=0.5, line_dash="dot", line_color="rgba(120, 120, 120, 0.4)",
+                annotation_text=f"{z['num']}.{z['name']}", annotation_position="top left",
+                annotation=dict(font_size=9, font_color="#222222", textangle=-90)
+            )
+
+        fig1.add_hline(y=cfg["trigger_temp_brazing"], line_dash="dash", line_color="red",
+                       annotation_text=f"Brazing ({cfg['trigger_temp_brazing']}°C)", annotation_position="bottom right")
+
+        fig1.update_layout(
+            title=f"GLOBAL FURNACE PROFILE ({f_id}): {data1['filename']}",
+            xaxis_title="Furnace Distance (Meters from Entrance)", yaxis_title="Temperature (°C)",
+            hovermode="x unified", template="plotly_white", height=550
+        )
+        st.plotly_chart(fig1, use_container_width=True)
+
+        st.markdown("---")
+        st.subheader("Individually Aligned Probe Chart (Own 60°C Entry)")
+
+        # Chart 2: Individually Aligned
+        fig2 = go.Figure()
+        for col in probe_cols:
+            offset_m = data1["probe_start_info"][col]["Offset_Meters"]
+            indiv_hover = np.stack((df_m1["Time_HHMMSS"], df_m1["Time_Seconds"], np.full(len(df_m1), offset_m)), axis=-1)
+            fig2.add_trace(go.Scatter(
+                x=df_m1[f"Distance_{col}"], y=df_m1[col], mode="lines",
+                name=f"{col} (+{offset_m:.2f}m)" if offset_m > 0 else f"{col} (Lead)",
+                customdata=indiv_hover,
+                hovertemplate="%{fullData.name}: %{y:.1f} °C<br>Indiv Dist: %{x:.2f} m<br>Time: %{customdata[0]}"
+            ))
+
+        for z in zones:
+            z_color = GROUP_COLORS.get(z["group"], "rgba(200, 200, 200, 0.2)")
+            fig2.add_vrect(
+                x0=z["start"], x1=z["start"] + z["length"], fillcolor=z_color, layer="below",
+                line_width=0.5, line_dash="dot", line_color="rgba(120, 120, 120, 0.4)",
+                annotation_text=f"{z['num']}.{z['name']}", annotation_position="top left",
+                annotation=dict(font_size=9, font_color="#222222", textangle=-90)
+            )
+
+        fig2.update_layout(
+            title=f"INDIVIDUALLY ALIGNED PROFILES ({f_id}): {data1['filename']}",
+            xaxis_title="Individual Probe Distance (Meters from Probe's 60°C Entry)", yaxis_title="Temperature (°C)",
+            hovermode="x unified", template="plotly_white", height=550
+        )
+        st.plotly_chart(fig2, use_container_width=True)
+
+    # --------------------------------------------------------------------------
+    # TAB 2: METADATA & PROBE MAP
+    # --------------------------------------------------------------------------
+    with tabs[1]:
+        col_a, col_b = st.columns(2)
+        with col_a:
+            st.subheader("📝 Operator Comments & Recipe Settings")
+            st.text_area("Operator Comments", data1["operator_comment"], height=100)
+            st.text_area("Recipe / Process Settings", data1["process_settings"], height=180)
+
+        with col_b:
+            st.subheader("📍 Thermocouple Channel Locations")
+            if data1["probe_locations"]:
+                df_loc = pd.DataFrame([{"Channel": k, "Attached Location": v} for k, v in data1["probe_locations"].items()])
+                st.dataframe(df_loc, use_container_width=True, hide_index=True)
+            else:
+                st.info("No explicit probe location mapping found in PAQ header.")
+
+            if data1["embedded_img"]:
+                st.subheader("🖼️ Embedded PAQ Image")
+                st.image(data1["embedded_img"], use_container_width=True)
+
+        st.subheader("⏱️ Individual Probe Entry Alignment Table (60°C Entry)")
+        shift_rows = []
+        for col, info in data1["probe_start_info"].items():
+            status = "🏆 First (Lead)" if info["Is_First"] else f"+{info['Offset_Meters']:.2f} m lag"
+            shift_rows.append({
+                "Probe": col,
+                "Start Time (HH:MM:SS)": info["Start_HHMMSS"],
+                "Start Sec": f"{info['Start_Sec']}s",
+                "Lag Time vs First": f"+{info['Offset_Sec']}s" if info['Offset_Sec'] > 0 else "0s (Lead)",
+                "Distance Shift": f"+{info['Offset_Meters']:.2f} m" if info['Offset_Meters'] > 0 else "0.00 m (Lead)",
+                "Status": status
+            })
+        st.dataframe(pd.DataFrame(shift_rows), use_container_width=True, hide_index=True)
+
+    # --------------------------------------------------------------------------
+    # TAB 3: ZONE & STAGE SUMMARY
+    # --------------------------------------------------------------------------
+    with tabs[2]:
+        st.subheader("🔥 Zone Peak Temperature Table")
+        zone_max_records = []
+        for z in zones:
+            z_start, z_end = z["start"], round(z["start"] + z["length"], 2)
+            z_df = df_m1[(df_m1["Distance_Meters"] >= z_start) & (df_m1["Distance_Meters"] < z_end)]
+            row_dict = {"Group": z["group"], "Zone #": z["num"], "Zone Name": z["name"], "Start (m)": z_start, "End (m)": z_end}
+            if not z_df.empty and probe_cols:
+                max_s = z_df[probe_cols].max()
+                for col in probe_cols: row_dict[col] = max_s[col]
+                row_dict["Zone Peak (°C)"] = max_s.max()
+                row_dict["Hot Probe"] = max_s.idxmax()
+            else:
+                for col in probe_cols: row_dict[col] = np.nan
+                row_dict["Zone Peak (°C)"] = np.nan
+                row_dict["Hot Probe"] = "-"
+            zone_max_records.append(row_dict)
+
+        df_zone_summary = pd.DataFrame(zone_max_records)
+        st.dataframe(df_zone_summary.style.background_gradient(cmap="OrRd", subset=probe_cols + ["Zone Peak (°C)"]), use_container_width=True)
+
+        st.markdown("---")
+        st.subheader("⏱️ Inspection Matrix (Stage Max Temps & Dwell Times)")
+        stages = cfg["stages"]
+        dryer_info = next((s for s in stages if s["Stage"] == "Dryer"), stages[0])
+        brazing_info = next((s for s in stages if s["Stage"] == "Brazing"), stages[-1])
+
+        dryer_df = df_m1[(df_m1["Distance_Meters"] >= dryer_info["Start (m)"]) & (df_m1["Distance_Meters"] <= dryer_info["End (m)"])]
+        brazing_df = df_m1[(df_m1["Distance_Meters"] >= brazing_info["Start (m)"]) & (df_m1["Distance_Meters"] <= brazing_info["End (m)"])]
+
+        matrix_rows = []
+        for col in probe_cols:
+            r = {"Probe": col}
+            r["Dryer Max (°C)"] = round(dryer_df[col].max(), 1) if not dryer_df.empty else np.nan
+            r[f"Dryer Dwell (≥{int(cfg['dryer_dwell_thresh'])}°C)"] = format_dwell_time((dryer_df[col] >= cfg['dryer_dwell_thresh']).sum())
+            r["Brazing Max (°C)"] = round(brazing_df[col].max(), 1) if not brazing_df.empty else np.nan
+            r[f"Brazing Dwell (≥{int(cfg['brazing_dwell_thresh_1'])}°C)"] = format_dwell_time((brazing_df[col] >= cfg['brazing_dwell_thresh_1']).sum())
+            r[f"Brazing Dwell (≥{int(cfg['brazing_dwell_thresh_2'])}°C)"] = format_dwell_time((brazing_df[col] >= cfg['brazing_dwell_thresh_2']).sum())
+            r[f"Brazing Dwell (≥{int(cfg['brazing_dwell_thresh_3'])}°C)"] = format_dwell_time((brazing_df[col] >= cfg['brazing_dwell_thresh_3']).sum())
+            matrix_rows.append(r)
+
+        df_matrix = pd.DataFrame(matrix_rows)
+        st.dataframe(df_matrix, use_container_width=True, hide_index=True)
+
+    # --------------------------------------------------------------------------
+    # TAB 4: STATISTICS & BOXPLOTS
+    # --------------------------------------------------------------------------
+    with tabs[3]:
+        st.subheader("📈 Temperature Distribution Boxplot by Probe")
+        colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f']
+        fig_box = go.Figure()
+        for idx, col in enumerate(probe_cols):
+            fig_box.add_trace(go.Box(y=df_m1[col].dropna(), name=col, boxpoints='outliers', marker_color=colors[idx % len(colors)]))
+        fig_box.update_layout(title="Temperature Distribution Across Probes", yaxis_title="Temperature (°C)", template="plotly_white", height=500)
+        st.plotly_chart(fig_box, use_container_width=True)
+
+        st.markdown("---")
+        st.subheader("📊 Zone Temperature Statistics (All Probes Combined)")
+        stats_list = []
+        for z in zones:
+            z_start, z_end = z["start"], z["start"] + z["length"]
+            df_z = df_m1[(df_m1["Distance_Meters"] >= z_start) & (df_m1["Distance_Meters"] <= z_end)]
+            if not df_z.empty:
+                z_vals = df_z[probe_cols].values.flatten()
+                z_vals = z_vals[~np.isnan(z_vals)]
+                if len(z_vals) > 0:
+                    stats_list.append({
+                        "Zone #": z["num"], "Zone Name": z["name"], "Group": z["group"],
+                        "Avg Temp (°C)": round(np.mean(z_vals), 2),
+                        "Std Dev (°C)": round(np.std(z_vals, ddof=1), 2),
+                        "Min Temp (°C)": round(np.min(z_vals), 2),
+                        "Max Temp (°C)": round(np.max(z_vals), 2),
+                        "Data Points": len(z_vals)
+                    })
+        st.dataframe(pd.DataFrame(stats_list), use_container_width=True, hide_index=True)
+
+    # --------------------------------------------------------------------------
+    # TAB 5: MASTER DATASET & EXPORT
+    # --------------------------------------------------------------------------
+    with tabs[4]:
+        st.subheader("💾 Unified 1-Row Dataset (Database Ready)")
+        row_data = {
+            "File_Name": data1["filename"], "Furnace_Type": f_id,
+            "Entrance_Time": data1["detected_start_hhmmss"], "Line_Speed_MPM": data1["line_speed_mpm"]
+        }
+        for pb in [f"PB{i}" for i in range(1, 9)]:
+            ch = f"PB#{pb.replace('PB','')}"
+            row_data[f"{pb}_Location"] = data1["probe_locations"].get(ch, "Unlabeled")
+            row_data[f"{pb}_Start_Time"] = data1["probe_start_info"].get(ch, {}).get("Start_HHMMSS", "00:00:00")
+            row_data[f"{pb}_Lag_Sec"] = data1["probe_start_info"].get(ch, {}).get("Offset_Sec", 0)
+
+        df_single_row = pd.DataFrame([row_data])
+        st.dataframe(df_single_row, use_container_width=True)
+
+        buffer = io.BytesIO()
+        with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+            df_single_row.to_excel(writer, sheet_name="Master_Record", index=False)
+            df_zone_summary.to_excel(writer, sheet_name="Zone_Peaks", index=False)
+            df_matrix.to_excel(writer, sheet_name="Inspection_Matrix", index=False)
+
+        st.download_button(
+            label="📥 Download Complete Excel Report",
+            data=buffer.getvalue(),
+            file_name=f"{os.path.splitext(data1['filename'])[0]}_Analysis.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+
+    # --------------------------------------------------------------------------
+    # TAB 6: COMPARE FILES
+    # --------------------------------------------------------------------------
+    with tabs[5]:
+        st.subheader("⚖️ Compare Profiles Across Two Files")
+        if not uploaded_file2:
+            st.info("👈 Upload a second `.paq` file in the sidebar to view comparison graph.")
+        else:
+            data2 = process_paq_file(uploaded_file2.getvalue(), uploaded_file2.name)
+            if not data2:
+                st.error("❌ Failed to parse second `.paq` file.")
+            else:
+                df_m2 = data2["df_master"]
+                fig_comp = go.Figure()
+
+                # Add File 1 traces
+                for col in probe_cols:
+                    if col in df_m1.columns:
+                        fig_comp.add_trace(go.Scatter(
+                            x=df_m1["Distance_Meters"], y=df_m1[col], mode="lines",
+                            name=f"F1 ({data1['filename'][:15]}..): {col}",
+                            line=dict(width=1.5)
+                        ))
+
+                # Add File 2 traces
+                for col in data2["probe_cols"]:
+                    if col in df_m2.columns:
+                        fig_comp.add_trace(go.Scatter(
+                            x=df_m2["Distance_Meters"], y=df_m2[col], mode="lines",
+                            name=f"F2 ({data2['filename'][:15]}..): {col}",
+                            line=dict(dash='dash', width=1.5)
+                        ))
+
+                fig_comp.update_layout(
+                    title=f"COMPARISON: {data1['filename']} vs {data2['filename']}",
+                    xaxis_title="Distance (Meters)", yaxis_title="Temperature (°C)",
+                    hovermode="x unified", template="plotly_white", height=600
+                )
+                st.plotly_chart(fig_comp, use_container_width=True)
