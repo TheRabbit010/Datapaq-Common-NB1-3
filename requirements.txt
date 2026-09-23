@@ -1,6 +1,7 @@
 streamlit
-numpy
 pandas
+numpy
+plotly
 olefile
-pillow
-
+Pillow
+openpyxl
