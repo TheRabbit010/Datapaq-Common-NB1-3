@@ -313,39 +313,42 @@ def process_paq_file(file_bytes, filename):
             except Exception:
                 continue
 
-    # 4. AUTOMATIC FURNACE & SUB-TYPE SELECTION LOGIC
+    # 4. AUTOMATIC FURNACE & SUB-TYPE SELECTION LOGIC (CORRECTED PRIORITY ORDER)
     recipe_corpus = f"{process_settings} {operator_comment} {filename}"
 
     furnace_id = "NB3"  # Default fallback
     furnace_variant = "NB3"
 
-    # Priority Pattern Rules Check:
-    # 1. RAD Check (Sub-variant of NB1)
-    if re.search(r'\bRAD\b', recipe_corpus, re.IGNORECASE):
-        furnace_id = "NB1"
-        furnace_variant = "NB1 (RAD)"
-
-    # 2. NB1 Check: YYMMDD, WKxx, CDS, KN9, 12SHP
-    elif (re.search(r'\b(CDS|KN9|12SHP)\b', recipe_corpus, re.IGNORECASE) or 
-          re.search(r'\bWK\d{1,2}\b', recipe_corpus, re.IGNORECASE) or 
-          re.search(r'\b\d{6}\b', recipe_corpus)):
-        furnace_id = "NB1"
-        furnace_variant = "NB1 (Standard)"
-
-    # 3. NB2 Check: Tahc, Utahc
-    elif re.search(r'\b(Tahc|Utahc)\b', recipe_corpus, re.IGNORECASE):
-        furnace_id = "NB2"
-        furnace_variant = "NB2 (Tahc/Utahc)"
-
-    # 4. NB3 Check: KE8, M2, EVO, BTM
-    elif re.search(r'\b(KE8|M2|EVO|BTM)\b', recipe_corpus, re.IGNORECASE):
+    # PRIORITY 1: Explicit NB3 Model Keywords (BTM, KE8, M2, EVO)
+    # Checks specific model names first so WKxx prefix doesn't hijack them!
+    if re.search(r'\b(KE8|M2|EVO|BTM)\b', recipe_corpus, re.IGNORECASE):
         furnace_id = "NB3"
         if re.search(r'\bBTM\b', recipe_corpus, re.IGNORECASE):
             furnace_variant = "NB3 (BTM)"
         else:
             furnace_variant = "NB3 (KE8/M2/EVO)"
 
-    # Fallback to general regex tag check if no explicit product keywords match
+    # PRIORITY 2: Explicit NB2 Model Keywords (Tahc, Utahc)
+    elif re.search(r'\b(Tahc|Utahc)\b', recipe_corpus, re.IGNORECASE):
+        furnace_id = "NB2"
+        furnace_variant = "NB2 (Tahc/Utahc)"
+
+    # PRIORITY 3: Explicit NB1 Model Keywords (RAD, CDS, KN9, 12SHP)
+    elif re.search(r'\b(RAD|CDS|KN9|12SHP)\b', recipe_corpus, re.IGNORECASE):
+        furnace_id = "NB1"
+        if re.search(r'\bRAD\b', recipe_corpus, re.IGNORECASE):
+            furnace_variant = "NB1 (RAD)"
+        else:
+            furnace_variant = "NB1 (CDS/KN9/12SHP)"
+
+    # PRIORITY 4: Generic NB1 Week/Date patterns (WKxx, YYMMDD)
+    # Checked ONLY if no explicit model keywords (BTM, M2, Tahc, etc.) were found above
+    elif (re.search(r'\bWK\d{1,2}\b', recipe_corpus, re.IGNORECASE) or 
+          re.search(r'\b\d{6}\b', recipe_corpus)):
+        furnace_id = "NB1"
+        furnace_variant = "NB1 (Standard)"
+
+    # PRIORITY 5: Fallback regex check for NB1/NB2/NB3 explicit tags
     else:
         f_match = re.search(r'NB\s*Furnace\s*0?([123])\b|NB\s*#?\s*0?([123])\b|NB-0?([123])\b', recipe_corpus, re.IGNORECASE)
         if f_match:
