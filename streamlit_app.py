@@ -167,26 +167,60 @@ def format_dwell_time(total_seconds):
     h, m = divmod(m, 60)
     return f"{int(h):02d}:{int(m):02d}:{int(s):02d}"
 
+def clean_paq_text(raw_text):
+    """Strips binary C++ class identifiers, network addresses, and cuts off at binary garbage blocks."""
+    if not raw_text: return ""
+    text = re.split(r'\\\\', raw_text)[0]
+    
+    parts = re.split(r'\b(?:CProbe|CSampleInterval|CAxisCustomUnits|CPaqfile|CByteDataArray|CProbeResult|CFurnaceRecipe|CZoom|CProbeMapEntry\w*|cho1-sv|CProcessFile|COven|CZone|CRecipe|CProduct|CAnalysisParameters|CAlarmParameters|CAlarmProbes|CAlarmParametersTime|CRiseFallRange|CTemperatureLimits|CTimeLimits|CCustomUnits|CLineSpeed|COvenStart|CProcessOptimisation|CToleranceCurve)\b', text)
+    
+    cleaned_parts = []
+    for p in parts:
+        p = p.strip()
+        p = re.sub(r'^[>#;\.,\|]+', '', p).strip() 
+        if len(p) < 3: continue
+        
+        # AGGRESSIVE TRUNCATION: Stop immediately if hitting a system zone tag or binary chunk
+        if re.search(r'\b(Untitled|Entry Zone|XFER|WatCool|Exit curtain|AirCool|Exit Zone|Dryer#1|VSTS Exit Dryer|Exit Dryer|0Hl|!@f|"onB|aaa\.\.\.|FFGCC|bbbRRR|LNNSQ|OD@)\b', p, re.IGNORECASE):
+            clean_segment = re.split(r'\b(Untitled|Entry Zone|XFER|WatCool|Exit curtain|AirCool|Exit Zone|Dryer#1|VSTS Exit Dryer|Exit Dryer|0Hl|!@f|"onB|aaa\.\.\.|FFGCC|bbbRRR|LNNSQ|OD@)\b', p, flags=re.IGNORECASE)[0]
+            if clean_segment.strip():
+                cleaned_parts.append(clean_segment.strip())
+            break 
+            
+        if re.search(r'(.)\1{3,}', p): continue 
+        if re.search(r'[@^\$|~<>{}\[\]]{2,}', p): continue 
+        if re.search(r'^[0-9\W]+$', p): continue 
+        
+        p = re.sub(r'#\d+', '', p)
+        p = re.sub(r'\s+', ' ', p).strip()
+        
+        if p and len(p) >= 3:
+            cleaned_parts.append(p)
+            
+    return " ".join(cleaned_parts)
+
 def parse_operator_and_metadata(comments_list):
-    """Extract Operator, Company, Site and Clean the Notes"""
+    """Extract Operator, Company, Site, Clean Comments and Process Notes"""
     combined = " ".join(comments_list)
     op, comp, site = "N/A", "N/A", "N/A"
     
     m_site = re.search(r'(Power\s+Chonburi|Chonburi|Plant\s+\d+|Factory\s+\d+)', combined, re.IGNORECASE)
     if m_site: site = m_site.group(1).strip()
     
-    m_comp = re.search(r'\b(VSTS|Datapaq)\b', combined, re.IGNORECASE)
+    # Prioritize VSTS over Datapaq
+    m_comp = re.search(r'\b(VSTS)\b', combined, re.IGNORECASE)
+    if not m_comp: m_comp = re.search(r'\b(Datapaq)\b', combined, re.IGNORECASE)
     if m_comp: comp = m_comp.group(1).strip()
     
-    combined_clean_start = re.sub(r'^\s*CAlarm\s*', '', combined)
-    
+    # Extract Operator (handle cases like CAlarm Sunisa/Niwat)
+    combined_clean_start = re.sub(r'^\s*CAlarm\s*', '', combined, flags=re.IGNORECASE)
     m_op = re.search(r'^([A-Za-z/]+)\s+(?:Monthly|WK|date|product|validation|run|test)', combined_clean_start, re.IGNORECASE)
     if m_op: op = m_op.group(1).strip()
     elif "Niwat" in combined_clean_start: op = "Niwat"
     elif "Sunisa" in combined_clean_start: op = "Sunisa"
 
     # Aggressive cut for comments box
-    chopped_comment = re.split(r'\b(Untitled|Entry Zone|0Hl|!@f|"onB|aaa\.\.\.|FFGCC|bbbRRR|LNNSQ)\b', combined_clean_start, flags=re.IGNORECASE)[0]
+    chopped_comment = re.split(r'\b(Untitled|Entry Zone|VSTS Exit Dryer|Exit Dryer|0Hl|!@f|"onB|aaa\.\.\.|FFGCC|bbbRRR|LNNSQ|OD@)\b', combined_clean_start, flags=re.IGNORECASE)[0]
     
     clean_notes = chopped_comment
     for token in [op, comp, site, "CAlarm"]:
@@ -203,11 +237,16 @@ def parse_operator_and_metadata(comments_list):
 
     return op, comp, site, clean_notes if clean_notes else "N/A"
 
+def clean_probe_location(loc_desc):
+    # Remove rogue single uppercase letters preceding keywords (e.g. BLeft -> Left, JMiddle -> Middle)
+    return re.sub(r'\b[A-Z](Left|Right|Middle|Bottom|Top)\b', r'\1', loc_desc, flags=re.IGNORECASE)
+
 @st.cache_data
 def process_paq_file(file_bytes, filename):
     ole_bytes = io.BytesIO(file_bytes)
     ole = olefile.OleFileIO(ole_bytes)
 
+    # 1. Probe Streams Processing
     probe_streams = [s for s in ole.listdir() if len(s) >= 4 and s[0] == 'Paqfiles' and s[2] == 'ProbeResults']
     probe_streams = sorted(probe_streams, key=lambda x: x[-1])
 
@@ -232,6 +271,7 @@ def process_paq_file(file_bytes, filename):
 
     probe_cols = [col for col in df_master.columns if col.startswith("PB#")]
 
+    # 2. Entrance Detection
     SUSTAINED_SECONDS = 15
     probe_start_secs = {}
     for col in probe_cols:
@@ -246,6 +286,7 @@ def process_paq_file(file_bytes, filename):
     first_probe_name = [k for k, v in probe_start_secs.items() if v == detected_start_sec][0] if valid_starts else probe_cols[0]
     detected_start_hhmmss = df_master[df_master["Time_Seconds"] == detected_start_sec].iloc[0]["Time_HHMMSS"]
 
+    # 3. Stream Scanning Loop for Metadata, Recipe, Image, and Probe Locations
     raw_texts = []
     embedded_img = None
 
@@ -260,6 +301,7 @@ def process_paq_file(file_bytes, filename):
                     try: data_b = zlib.decompress(raw_b[8:] if raw_b.startswith(b'ZLIB') else raw_b, -zlib.MAX_WBITS)
                     except Exception: pass
 
+            # Extract Image
             if embedded_img is None and len(data_b) > 500:
                 for header in [b'\x89PNG\r\n\x1a\n', b'\xff\xd8\xff', b'BM']:
                     idx = data_b.find(header)
@@ -269,6 +311,7 @@ def process_paq_file(file_bytes, filename):
                             break
                         except Exception: pass
 
+            # Extract ASCII Strings
             ascii_matches = re.findall(rb'[\x20-\x7E]{4,}', data_b)
             for m in ascii_matches:
                 raw_texts.append(m.decode('ascii', errors='ignore').strip())
@@ -288,40 +331,22 @@ def process_paq_file(file_bytes, filename):
         if is_recipe:
             s_rec = re.sub(r'\b(?:CProcessFile|COven|CZone|CRecipe|CProduct|CAnalysisParameters|CToleranceCurve)\b', '', s).strip()
             s_rec = re.sub(r'^[>#;\.,\|]+', '', s_rec).strip()
-            # Format Recipe to wrap lines automatically based on target keywords
+            # Format Recipe nicely
             s_rec = re.sub(r'(WJ Flow)', r'\n\1', s_rec)
             s_rec = re.sub(r'(NB Top Temp)', r'\n\1', s_rec)
             s_rec = re.sub(r'(NB Bot temp)', r'\n\1', s_rec)
-            
             if s_rec and s_rec not in found_recipes: 
                 found_recipes.append(s_rec)
             continue
             
-        parts = re.split(r'\b(?:CProbe|CSampleInterval|CAxisCustomUnits|CPaqfile|CByteDataArray|CProbeResult|CFurnaceRecipe|CZoom|CProbeMapEntry\w*|cho1-sv|CProcessFile|COven|CZone|CRecipe|CProduct|CAnalysisParameters|CAlarmParameters|CAlarmProbes|CAlarmParametersTime|CRiseFallRange|CTemperatureLimits|CTimeLimits|CCustomUnits|CLineSpeed|COvenStart|CProcessOptimisation|CToleranceCurve)\b', s)
+        s_clean = clean_paq_text(s)
+        if not s_clean: continue
         
-        for p in parts:
-            p = p.strip()
-            p = re.sub(r'^[>#;\.,\|]+', '', p).strip() 
-            if len(p) < 3: continue
-            
-            if re.search(r'\b(Untitled|Entry Zone|XFER|WatCool|Exit curtain|AirCool|Exit Zone|Dryer#1|Exit Dryer|0Hl !@f|aaa\.\.\.)\b', p, re.IGNORECASE):
-                clean_segment = re.split(r'\b(Untitled|Entry Zone|XFER|WatCool|Exit curtain|AirCool|Exit Zone|Dryer#1|Exit Dryer|0Hl !@f|aaa\.\.\.)\b', p, flags=re.IGNORECASE)[0]
-                if clean_segment.strip(): p = clean_segment.strip()
-                else: continue
-                
-            if re.search(r'(.)\1{3,}', p): continue 
-            if re.search(r'[@^\$|~<>{}\[\]]{2,}', p): continue 
-            if re.search(r'^[0-9\W]+$', p): continue 
-            
-            p = re.sub(r'#\d+', '', p)
-            p = re.sub(r'\s+', ' ', p).strip()
-            if not p or len(p) < 3: continue
-            
-            is_probe = re.search(r'\b(cooler|drill&insert|inside H/D|manifold|core)\b', p, re.IGNORECASE)
-            if is_probe:
-                if p not in found_probes: found_probes.append(p)
-            else:
-                if p not in found_comments: found_comments.append(p)
+        is_probe = re.search(r'\b(cooler|drill&insert|inside H/D|manifold|core)\b', s_clean, re.IGNORECASE)
+        if is_probe:
+            if s_clean not in found_probes: found_probes.append(s_clean)
+        else:
+            if s_clean not in found_comments: found_comments.append(s_clean)
 
     # Map Probes
     probe_locations = {}
@@ -330,7 +355,7 @@ def process_paq_file(file_bytes, filename):
         if m:
             idx = int(m.group(1))
             ch_key = f"PB#{idx}"
-            loc_desc = m.group(2).strip()
+            loc_desc = clean_probe_location(m.group(2).strip())
             label = f"#{idx} (°C) {loc_desc}"
             if ch_key not in probe_locations or len(label) > len(probe_locations[ch_key]):
                 probe_locations[ch_key] = label
@@ -341,7 +366,7 @@ def process_paq_file(file_bytes, filename):
         while f"PB#{assigned_idx}" in probe_locations and assigned_idx <= 8:
             assigned_idx += 1
         if assigned_idx > 8: break
-        probe_locations[f"PB#{assigned_idx}"] = f"#{assigned_idx} (°C) {p}"
+        probe_locations[f"PB#{assigned_idx}"] = f"#{assigned_idx} (°C) {clean_probe_location(p)}"
         assigned_idx += 1
         
     for col in probe_cols:
@@ -612,6 +637,5 @@ else:
                 for col in data2["probe_cols"]:
                     if col in df_m2.columns: fig_comp.add_trace(go.Scatter(x=df_m2["Distance_Meters"], y=df_m2[col], mode="lines", name=f"F2: {col}", line=dict(dash='dash', width=1.5)))
                 
-                # Limit X-Axis on comparison chart as well
                 fig_comp.update_layout(title=f"COMPARISON: {data1['filename']} vs {data2['filename']}", xaxis=dict(title="Distance (Meters)", range=[-1, total_furnace_length + 2]), yaxis_title="Temperature (°C)", hovermode="x unified", template="plotly_white", height=600)
                 st.plotly_chart(fig_comp, use_container_width=True)
