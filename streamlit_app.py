@@ -80,6 +80,35 @@ GROUP_COLORS = {
     "Cooling": "rgba(173, 216, 230, 0.15)"
 }
 
+# Process Standards Database (PRCNVR Codes)
+STANDARD_SPECS = {
+    "NB1 (RAD)": {
+        "id": "PRCNVR02044",
+        "max": "Dryer: 175-260°C &nbsp;|&nbsp; Debinder: 200-375°C &nbsp;|&nbsp; Brazing: 583-607°C",
+        "dwell": "Dryer ≥175°C ≥ 1.00 min &nbsp;|&nbsp; Debinder ≥200°C ≥ 2.00 min &nbsp;|&nbsp; Brazing ≥577°C = 2.30 - 7.00 min, ≥583°C ≥ 2.30 min"
+    },
+    "NB1 (CDS/KN9/12SHP)": {
+        "id": "PRCNVR02004",
+        "max": "Dryer: 200-350°C &nbsp;|&nbsp; Debinder: 300-375°C &nbsp;|&nbsp; Brazing: 585-607°C",
+        "dwell": "Dryer ≥200°C ≥ 1.30 min &nbsp;|&nbsp; Debinder ≥300°C ≥ 2.30 min &nbsp;|&nbsp; Brazing ≥577°C = 4.00 - 7.45 min"
+    },
+    "NB3 (KE8/M2/EVO)": {
+        "id": "PRCNVR02059",
+        "max": "Dryer: 200-375°C &nbsp;|&nbsp; Brazing: 598-606°C",
+        "dwell": "Dryer ≥200°C ≥ 1.30 min &nbsp;|&nbsp; Brazing ≥550°C = 7.00 - 10.30 min, ≥577°C = 4.30 - 7.00 min, ≥591°C = 1.30 - 4.00 min"
+    },
+    "NB2 (Tahc/Utahc)": {
+        "id": "PRCNVR02050",
+        "max": "Dryer: 200-375°C &nbsp;|&nbsp; Brazing: 596-604°C",
+        "dwell": "Dryer ≥250°C ≥ 1.00 min &nbsp;|&nbsp; Brazing ≥577°C = 4.00 - 7.00 min, ≥591°C = 1.30 - 4.30 min"
+    },
+    "NB3 (BTM)": {
+        "id": "PRCNVR02033",
+        "max": "Dryer: 300-375°C &nbsp;|&nbsp; Brazing: 595-608°C",
+        "dwell": "Dryer ≥300°C ≥ 2.00 min &nbsp;|&nbsp; Brazing ≥577°C = 4.00 - 14.00 min, ≥591°C = 2.00 - 12.00 min, ≥600°C ≤ 8.00 min"
+    }
+}
+
 # Furnace Configurations Database (NB1, NB2, NB3 Base Profiles)
 FURNACE_CONFIGS = {
     "NB1": {
@@ -610,6 +639,20 @@ else:
             matrix_rows.append(r)
             
         st.subheader(f"⏱️ Inspection Matrix — {f_variant}")
+        
+        # Display Standards Banner
+        std_info = STANDARD_SPECS.get(f_variant)
+        if std_info:
+            st.markdown(f"""
+            <div style="background-color: rgba(38, 39, 48, 0.8); padding: 10px; border-left: 5px solid #00ffff; border-radius: 5px; margin-bottom: 15px;">
+                <strong style="color: #00ffff; font-size: 1.1rem;">📝 Standard: {std_info['id']}</strong><br>
+                <span style="color: #a0aab2; font-size: 0.9rem;">
+                <b>Max Temp:</b> {std_info['max']}<br>
+                <b>Dwell Time:</b> {std_info['dwell']}
+                </span>
+            </div>
+            """, unsafe_allow_html=True)
+            
         st.dataframe(pd.DataFrame(matrix_rows), use_container_width=True, hide_index=True)
         st.markdown("---")
         
