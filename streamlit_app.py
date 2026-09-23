@@ -195,7 +195,7 @@ def clean_paq_text(raw_text):
     
     text = re.split(r'\\\\', raw_text)[0]
     
-    # Split by common OLE tags / structural artifacts to prevent concatenations
+    # Split by common OLE tags / structural artifacts
     parts = re.split(r'\b(?:CProbe|CSampleInterval|CAxisCustomUnits|CPaqfile|CByteDataArray|CProbeResult|CFurnaceRecipe|CZoom|CProbeMapEntry\w*|cho1-sv|CProcessFile|COven|CZone|CRecipe|CProduct|CAnalysisParameters|CAlarmParameters|CAlarmProbes|CAlarmParametersTime|CRiseFallRange|CTemperatureLimits|CTimeLimits|CCustomUnits|CLineSpeed|COvenStart|CProcessOptimisation|CToleranceCurve)\b', text)
     
     cleaned_parts = []
@@ -204,12 +204,12 @@ def clean_paq_text(raw_text):
         p = re.sub(r'^[>#;\.,\|]+', '', p).strip() 
         if len(p) < 3: continue
         
-        # Stop completely if we hit the start of the binary gibberish block / system tags
+        # VERY AGGRESSIVE TRUNCATION: Stop immediately if hitting a system zone tag
         if re.search(r'\b(Untitled|Entry Zone|XFER|WatCool|Exit curtain|AirCool|Exit Zone|Dryer#1|0Hl !@f|aaa\.\.\.)\b', p, re.IGNORECASE):
             clean_segment = re.split(r'\b(Untitled|Entry Zone|XFER|WatCool|Exit curtain|AirCool|Exit Zone|Dryer#1|0Hl !@f|aaa\.\.\.)\b', p, flags=re.IGNORECASE)[0]
             if clean_segment.strip():
                 cleaned_parts.append(clean_segment.strip())
-            break # Stop processing this chunk entirely
+            break # Stop completely for this chunk
             
         # Standard junk filtering
         if re.search(r'(.)\1{3,}', p): continue 
@@ -229,6 +229,7 @@ def parse_operator_and_metadata(comments_list):
     combined = " ".join(comments_list)
     op, comp, site = "N/A", "N/A", "N/A"
     
+    # Pre-emptively extract to avoid truncation logic hiding them
     m_site = re.search(r'(Power\s+Chonburi|Chonburi|Plant\s+\d+|Factory\s+\d+)', combined, re.IGNORECASE)
     if m_site: site = m_site.group(1).strip()
     
@@ -239,10 +240,14 @@ def parse_operator_and_metadata(comments_list):
     if m_op: op = m_op.group(1).strip()
     elif "Sunisa" in combined: op = "Sunisa"
 
-    clean_notes = combined
+    # Aggressive cut for comments box
+    chopped_comment = re.split(r'\b(Untitled|Entry Zone)\b', combined, flags=re.IGNORECASE)[0]
+    
+    clean_notes = chopped_comment
     for token in [op, comp, site]:
         if token != "N/A":
-            clean_notes = re.sub(rf'\b{re.escape(token)}\b', '', clean_notes, flags=re.IGNORECASE)
+            clean_notes = re.sub(rf'^\s*{re.escape(token)}\b\s*', '', clean_notes, flags=re.IGNORECASE)
+            clean_notes = re.sub(rf'\s+\b{re.escape(token)}\b\s+', ' ', clean_notes, flags=re.IGNORECASE)
 
     clean_notes = clean_paq_text(clean_notes)
     return op, comp, site, clean_notes if clean_notes else "N/A"
@@ -334,7 +339,7 @@ def process_paq_file(file_bytes, filename):
         if re.search(r'\.(ovn|prd|pro|rec|paq|jpg|png|bmp)\b', s, re.IGNORECASE): continue
         if re.search(r'\\Users\\|Desktop', s, re.IGNORECASE): continue
         
-        # Route recipe strings directly without heavy cleaning
+        # Route recipe strings directly without heavy cleaning to protect SP/Temp structures
         is_recipe = re.search(r'\b(O2 Exit|ppm|CV speed|mm/min|N2 Flow|WJ Flow|Top Temp|Bot temp|SP1|SP2\s*==>)\b', s, re.IGNORECASE)
         if is_recipe:
             s_rec = re.sub(r'\b(?:CProcessFile|COven|CZone|CRecipe|CProduct|CAnalysisParameters|CToleranceCurve)\b', '', s).strip()
