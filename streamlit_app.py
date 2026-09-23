@@ -195,7 +195,6 @@ def clean_paq_text(raw_text):
     
     text = re.split(r'\\\\', raw_text)[0]
     
-    # Split by common OLE tags / structural artifacts to prevent concatenations
     parts = re.split(r'\b(?:CProbe|CSampleInterval|CAxisCustomUnits|CPaqfile|CByteDataArray|CProbeResult|CFurnaceRecipe|CZoom|CProbeMapEntry\w*|cho1-sv|CProcessFile|COven|CZone|CRecipe|CProduct|CAnalysisParameters|CAlarmParameters|CAlarmProbes|CAlarmParametersTime|CRiseFallRange|CTemperatureLimits|CTimeLimits|CCustomUnits|CLineSpeed|COvenStart|CProcessOptimisation|CToleranceCurve)\b', text)
     
     cleaned_parts = []
@@ -204,13 +203,17 @@ def clean_paq_text(raw_text):
         p = re.sub(r'^[>#;\.,\|]+', '', p).strip() 
         if len(p) < 3: continue
         
+        # AGGRESSIVE TRUNCATION: Stop immediately if hitting a system zone tag
+        if re.search(r'\b(Untitled|Entry Zone|XFER|WatCool|Exit curtain|AirCool|Exit Zone|Dryer#1|Exit Dryer|0Hl !@f|aaa\.\.\.|FFGCC)\b', p, re.IGNORECASE):
+            clean_segment = re.split(r'\b(Untitled|Entry Zone|XFER|WatCool|Exit curtain|AirCool|Exit Zone|Dryer#1|Exit Dryer|0Hl !@f|aaa\.\.\.|FFGCC)\b', p, flags=re.IGNORECASE)[0]
+            if clean_segment.strip():
+                cleaned_parts.append(clean_segment.strip())
+            break 
+            
         # Standard junk filtering
         if re.search(r'(.)\1{3,}', p): continue 
         if re.search(r'[@^\$|~<>{}\[\]]{2,}', p): continue 
         if re.search(r'^[0-9\W]+$', p): continue 
-        
-        # Remove specific zone headers
-        p = re.sub(r'\b(Untitled NB#\d Entry Zone|XFER|WatCool#\d|Exit curtain|AirCool#\d|Exit Zone|Dryer#\d|0Hl !@f|aaa\.\.\.)\b', '', p, flags=re.IGNORECASE)
         
         p = re.sub(r'#\d+', '', p)
         p = re.sub(r'\s+', ' ', p).strip()
@@ -232,12 +235,12 @@ def parse_operator_and_metadata(comments_list):
     m_comp = re.search(r'\b(VSTS|Datapaq)\b', combined, re.IGNORECASE)
     if m_comp: comp = m_comp.group(1).strip()
     
-    m_op = re.search(r'\b(Sunisa|[A-Z][a-z]{3,15})\b\s+(?:Monthly|WK|date|product|validation|run|test)', combined, re.IGNORECASE)
-    if m_op: op = m_op.group(1).strip()
-    elif "Sunisa" in combined: op = "Sunisa"
+    if "Sunisa" in combined: op = "Sunisa"
 
-    # Remove extracted tokens from text
-    clean_notes = combined
+    # Aggressive cut for comments box BEFORE applying other logic
+    chopped_comment = re.split(r'\b(Untitled|Entry Zone|0Hl|!@f|"onB|aaa\.\.\.|FFGCC|bbbRRR|LNNSQ)\b', combined, flags=re.IGNORECASE)[0]
+    
+    clean_notes = chopped_comment
     for token in [op, comp, site]:
         if token != "N/A":
             clean_notes = re.sub(rf'^\s*{re.escape(token)}\b\s*', '', clean_notes, flags=re.IGNORECASE)
@@ -246,7 +249,7 @@ def parse_operator_and_metadata(comments_list):
     clean_notes = clean_paq_text(clean_notes)
 
     # Split general comments from specific process notes
-    split_match = re.search(r'(.*?)(Exit Dryer|BTM M48 gap250|Untitled Entry Zone)(.*)', clean_notes, re.IGNORECASE)
+    split_match = re.search(r'(.*?)(Exit Dryer|BTM M48 gap250|XFER\b)(.*)', clean_notes, re.IGNORECASE)
     
     if split_match:
         comment_part = split_match.group(1).strip()
@@ -663,3 +666,38 @@ else:
                 # Limit X-Axis on comparison chart as well
                 fig_comp.update_layout(title=f"COMPARISON: {data1['filename']} vs {data2['filename']}", xaxis=dict(title="Distance (Meters)", range=[-1, total_furnace_length + 2]), yaxis_title="Temperature (°C)", hovermode="x unified", template="plotly_white", height=600)
                 st.plotly_chart(fig_comp, use_container_width=True)
+1.แก้ไขกล่อง Process Notes  ตามภาพตัวอย่าง 1
+2.แก้ไขตาราง Thermocouple Channel Locations โดยดึงข้อความตั้งแต่หลัง (#1) จนสิ้นสุดข้อความแต่ละบรรทัด  ตามภาพตัวอย่าง 2
+3.แก้ไขกล่องข้อความ 📝 Recipe / Process Settings ตามภาพตัวอย่าง 3
+4.เพิ่มฟังก์ชั่นให้ตาราง ⏱️ Inspection Matrix  แสดงเฉพาะข้อมูลอุณหภูมิที่ตรงตามเงื่อนไขของ 
+ NB3 Detection
+กรณี BTM:
+Dryer Dwell: ≥250.0°C และ ≥300.0°C
+Brazing Dwell: ≥550.0°C, ≥577.0°C, ≥591.0°C, ≥600.0°C
+กรณี KE8 / M2 / EVO:
+Dryer Dwell: ≥150.0°C และ ≥200.0°C
+Brazing Dwell: ≥550.0°C, ≥577.0°C, ≥591.0°C, ≥600.0°C
+
+NB2 Detection
+
+Dryer Dwell: ≥200.0°C
+Dryer Dwell: ≥250.0°C
+Brazing Dwell: ≥550.0°C, ≥577.0°C, ≥591.0°C, ≥600.0°C
+
+NB1 Detection
+กรณี YMMDD, WKxx, CDS, KN9, 12SHP
+Dryer Dwell: ≥150.0°C
+Dryer Dwell: ≥200.0°C
+Debinder Dwell: ≥300.0°C
+Brazing Dwell: ≥550.0°C, ≥577.0°C, ≥591.0°C, ≥600.0°C
+กรณี RAD
+Dryer Dwell: ≥150.0°C
+Dryer Dwell: ≥175.0°C
+Debinder Dwell: ≥200.0°C
+Brazing Dwell: ≥550.0°C, ≥583.0°C, ≥591.0°C, ≥600.0°C 
+
+There is a file you can reference named "image_5ba432.png". Refer to this file by its name verbatim.
+[source: 19]
+
+There is a file you can reference named "image_5b9db0.png". Refer to this file by its name verbatim.
+[source: 20]
