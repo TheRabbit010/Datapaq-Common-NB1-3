@@ -196,75 +196,115 @@ def format_dwell_time(total_seconds):
     return f"{int(h):02d}:{int(m):02d}:{int(s):02d}"
 
 def clean_paq_text(raw_text):
-    """Strips binary C++ class identifiers, file path noise, and truncates at network address."""
+    """Strips binary C++ class identifiers, network addresses, and binary noise."""
     if not raw_text:
         return ""
     
-    # Truncate at network address / UNC paths (e.g. \\cho1-sv...)
+    # Truncate at UNC network paths e.g. \\cho1-sv...
     text = re.split(r'\\\\', raw_text)[0]
     
-    tags_to_remove = [
-        r'\bCAxisCustomUnits\b', r'\bCPaqfile\b', r'\bCByteDataArray\b',
-        r'\bCProbeResult\b', r'\bCFurnaceRecipe\b', r'\bCZoom\b', 
-        r'\bCProbeMapEntry\b', r'\bcho1-sv\b', r'\bCProcessFile\b',
-        r'\bCOven\b', r'\bCZone\b', r'33333+', r'ffff+'
-    ]
-    for tag in tags_to_remove:
-        text = re.sub(tag, '', text, flags=re.IGNORECASE)
-        
-    text = re.sub(r'#\d+', '', text)  # Strip binary ID tags like #24275
+    # Truncate at CProbe or CPaqfile or binary symbol junk
+    text = re.split(r'\bCProbe\b|\bCAxisCustomUnits\b|\bCPaqfile\b|\bCByteDataArray\b', text)[0]
+    
+    # Truncate at binary symbol repetition sequences
+    text = re.split(r'[@^\$|~<>{}]{2,}', text)[0]
+    
+    # Clean binary ID tags like #24275
+    text = re.sub(r'#\d+', '', text)
+    
+    # Clean extra spaces
     text = re.sub(r'\s+', ' ', text).strip()
     return text
 
-def is_valid_probe_label(text):
-    """Filters out stream gibberish and binary floats decoded as ASCII."""
-    if not text or len(text) < 3:
+def is_valid_recipe_line(line):
+    line = line.strip()
+    if not line or len(line) < 3:
         return False
-    # Reject binary float / slash sequence artifacts
-    if re.search(r'[0-9/]{4,}', text): return False
-    if re.search(r'(.)\1{4,}', text): return False
-    if re.search(r'^[0-9\W]+$', text): return False
-    if re.search(r'[A-Za-z0-9]{12,}', text) and ' ' not in text: return False
-    
-    # Reject random consonant gibberish
-    words = [w for w in text.split() if len(w) > 4]
-    for w in words:
-        if not re.search(r'[aeiouAEIOU]', w):
-            return False
+    # Reject lines with long repeating char sequences e.g. "qrrrsssrss", "888ppp"
+    if re.search(r'(.)\1{3,}', line):
+        return False
+    # Reject lines with high proportion of random lowercase characters with no spaces
+    if len(line) > 12 and ' ' not in line and not re.search(r'[:=/-]', line):
+        return False
+    # Reject binary noise
+    if re.search(r'[\{\}\<\>\\@\^~]{2,}', line):
+        return False
+    if re.search(r'(?:CProcessFile|COven|CZone|Paqfile)', line, re.IGNORECASE):
+        return False
+    # Must contain meaningful text or numbers
+    if not re.search(r'[A-Za-z0-9]', line):
+        return False
     return True
 
+def score_probe_label(text):
+    """Scores a candidate probe label. Higher score = real human readable location."""
+    if not text or len(text) < 3:
+        return -100
+    if re.search(r'(.)\1{3,}', text): return -100
+    if re.search(r'[0-9/]{4,}', text): return -100
+    if re.search(r'^[0-9\W]+$', text): return -100
+    
+    score = 0
+    keywords = [
+        "cooler", "bottom", "top", "drill", "insert", "probe", "inside", "H/D",
+        "core", "center", "left", "right", "front", "rear", "FR", "RR", "LH", "RH",
+        "Mitsubishi", "Stacking", "surface", "air", "ambient", "middle"
+    ]
+    for kw in keywords:
+        if re.search(rf'\b{re.escape(kw)}\b', text, re.IGNORECASE):
+            score += 10
+            
+    words = text.split()
+    if len(words) >= 2:
+        score += len(words) * 2
+        
+    for w in words:
+        if len(w) >= 4 and not re.search(r'[aeiouAEIOU0-9]', w):
+            score -= 15
+            
+    return score
+
 def parse_operator_and_metadata(raw_comments_list):
-    """Extracts Operator Name, Company, Site, and Clean Notes."""
-    combined = " ".join(raw_comments_list)
+    """Extracts Operator Name, Company, Site, and Clean Comments."""
+    combined_raw = " ".join(raw_comments_list)
     
     operator_name = "N/A"
     company = "N/A"
     site = "N/A"
     
-    m_op = re.search(r'CPaqfile\s+([A-Za-z0-9_\-\.]+)', combined)
-    if not m_op:
-        m_op = re.search(r'(?:Operator|User)[:\s]+([A-Za-z0-9_\-\.]+)', combined, re.IGNORECASE)
-    if m_op:
-        operator_name = m_op.group(1).strip()
-        
-    m_comp = re.search(r'\b(VSTS|Datapaq)\b', combined, re.IGNORECASE)
+    # 1. Extract Company
+    m_comp = re.search(r'\b(VSTS|Datapaq)\b', combined_raw, re.IGNORECASE)
     if not m_comp:
-        m_comp = re.search(r'Company[:\s]+([A-Za-z0-9_\-\.]+)', combined, re.IGNORECASE)
+        m_comp = re.search(r'Company[:\s]+([A-Za-z0-9_\-\.]+)', combined_raw, re.IGNORECASE)
     if m_comp:
         company = m_comp.group(1 if m_comp.lastindex >= 1 else 0).strip()
         
-    m_site = re.search(r'(Power\s+Chonburi|Chonburi|Plant\s+\d+|Factory\s+\d+)', combined, re.IGNORECASE)
+    # 2. Extract Site
+    m_site = re.search(r'(Power\s+Chonburi|Chonburi|Plant\s+\d+|Factory\s+\d+)', combined_raw, re.IGNORECASE)
     if not m_site:
-        m_site = re.search(r'Site[:\s]+([A-Za-z0-9\s_\-\.]+)', combined, re.IGNORECASE)
+        m_site = re.search(r'Site[:\s]+([A-Za-z0-9\s_\-\.]+)', combined_raw, re.IGNORECASE)
     if m_site:
         site = m_site.group(0).strip()
+
+    # Clean the comments text first
+    clean_text = clean_paq_text(combined_raw)
+
+    # 3. Extract Operator Name
+    m_op = re.search(r'(?:CPaqfile|Operator|User)[:\s]+([A-Za-z0-9_\-\.]+)', combined_raw, re.IGNORECASE)
+    if not m_op:
+        m_op = re.search(r'^\s*([A-Z][a-z]{2,15})\b(?:\s+(?:Monthly|WK|date|product|validation|run|test|profile))', clean_text, re.IGNORECASE)
         
-    clean_text = clean_paq_text(combined)
-    
-    for token in [operator_name, company, site]:
-        if token != "N/A":
-            clean_text = re.sub(rf'\b{re.escape(token)}\b', '', clean_text, flags=re.IGNORECASE)
-            
+    if m_op:
+        operator_name = m_op.group(1).strip()
+
+    # Strip operator_name, company, site tokens from final notes box
+    if operator_name != "N/A":
+        clean_text = re.sub(rf'^\s*{re.escape(operator_name)}\b', '', clean_text).strip()
+    if company != "N/A":
+        clean_text = re.sub(rf'\b{re.escape(company)}\b', '', clean_text, flags=re.IGNORECASE).strip()
+    if site != "N/A":
+        clean_text = re.sub(rf'\b{re.escape(site)}\b', '', clean_text, flags=re.IGNORECASE).strip()
+
     clean_text = re.sub(r'\s+', ' ', clean_text).strip()
     return operator_name, company, site, clean_text if clean_text else "N/A"
 
@@ -322,8 +362,10 @@ def process_paq_file(file_bytes, filename):
     start_row = df_master[df_master["Time_Seconds"] == detected_start_sec].iloc[0]
     detected_start_hhmmss = start_row["Time_HHMMSS"]
 
-    # 3. Metadata, Comments, Image & Recipe Settings Extraction
+    # 3. Stream Scanning Loop for Metadata, Recipe, Image, and Probe Locations
     found_comments, found_recipe_items = [], []
+    probe_locations = {}
+    probe_scores = {col: -999 for col in probe_cols}
     embedded_img = None
 
     for stream_path in ole.listdir():
@@ -341,7 +383,7 @@ def process_paq_file(file_bytes, filename):
                     try: data_b = zlib.decompress(z_data, -zlib.MAX_WBITS)
                     except Exception: data_b = raw_b
 
-            # Extract Image
+            # Extract Raster Image
             if embedded_img is None and len(data_b) > 500:
                 for header, format_type in [(b'\x89PNG\r\n\x1a\n', 'PNG'), (b'\xff\xd8\xff', 'JPEG'), (b'BM', 'BMP')]:
                     idx = data_b.find(header)
@@ -351,66 +393,45 @@ def process_paq_file(file_bytes, filename):
                             break
                         except Exception: pass
 
-            # Extract ASCII Strings
+            # Extract ASCII Strings from decompressed stream
             ascii_matches = re.findall(rb'[\x20-\x7E]{4,}', data_b)
             for m in ascii_matches:
                 s_raw = m.decode('ascii', errors='ignore').strip()
-                s_clean = clean_paq_text(s_raw)
 
-                # Collect Comments
+                # A. Collect Comments
                 if any(k in s_name.lower() for k in ["comment", "notes", "header", "paqfile0"]):
-                    if len(s_clean) >= 3 and s_clean not in found_comments:
-                        found_comments.append(s_clean)
+                    if len(s_raw) >= 3 and s_raw not in found_comments:
+                        found_comments.append(s_raw)
 
-                # Collect Recipe Parameters (O2 Exit, ppm, N2 Flow, Top Temp, Bot temp, etc.)
-                if any(kw in s_raw for kw in ["O2 Exit", "ppm", "CV speed", "mm/min", "N2 Flow", "WJ Flow", "Top Temp", "Bot temp", "SP2", "SP1"]):
-                    if not any(bad in s_raw for bad in ["CProcessFile", "COven", "CZone", "Paqfile"]):
-                        if s_clean not in found_recipe_items:
-                            found_recipe_items.append(s_clean)
+                # B. Collect Recipe / Process Settings
+                if any(kw in s_raw for kw in ["O2 Exit", "ppm", "CV speed", "mm/min", "N2 Flow", "WJ Flow", "Top Temp", "Bot temp", "SP2", "SP1", "Recipe", "Process"]):
+                    if is_valid_recipe_line(s_raw):
+                        s_rec_clean = clean_paq_text(s_raw)
+                        if s_rec_clean and s_rec_clean not in found_recipe_items:
+                            found_recipe_items.append(s_rec_clean)
+
+                # C. Collect Thermocouple Probe Locations
+                s_probe_clean = re.sub(r'^\s*CProbe\s*>?', '', s_raw).strip()
+                s_probe_clean = clean_paq_text(s_probe_clean)
+                
+                for idx in range(1, len(probe_cols) + 1):
+                    ch_key = f"PB#{idx}"
+                    if re.search(rf'#?\b{idx}\b', s_probe_clean):
+                        score = score_probe_label(s_probe_clean)
+                        if score > probe_scores[ch_key]:
+                            probe_scores[ch_key] = score
+                            probe_locations[ch_key] = s_probe_clean
 
         except Exception:
             continue
+
+    # Ensure all PB#1..PB#8 channels have a fallback if score <= 0
+    for col in probe_cols:
+        if col not in probe_locations or probe_scores.get(col, -999) <= 0:
+            probe_locations[col] = f"Channel {col.replace('PB#', '')} (Unlabeled)"
 
     operator_name, company, site, clean_comments_text = parse_operator_and_metadata(found_comments)
     process_settings = "\n".join(found_recipe_items) if found_recipe_items else "Standard Recipe Parameters"
-
-    # 4. Thermocouple Probe Locations Extraction
-    probe_locations = {}
-
-    for stream_path in ole.listdir():
-        try:
-            raw_b = ole.openstream(stream_path).read()
-            if not raw_b: continue
-            data_b = raw_b[8:] if raw_b.startswith(b'ZLIB') else raw_b
-            try: decomp = zlib.decompress(data_b)
-            except Exception:
-                try: decomp = zlib.decompress(data_b, -zlib.MAX_WBITS)
-                except Exception: decomp = raw_b
-
-            ascii_strings = re.findall(rb'[\x20-\x7E]{4,}', decomp)
-            for m in ascii_strings:
-                s_raw = m.decode('ascii', errors='ignore').strip()
-                s_clean = clean_paq_text(s_raw)
-
-                # Match patterns like "#1 (°C) Bottom cooler..."
-                m_num = re.search(r'#?([1-8])\s*[\(°C\)]*\s*([A-Za-z0-9\s/_\-\.&,\(\)]+)', s_clean)
-                if m_num:
-                    ch_idx = int(m_num.group(1))
-                    ch_key = f"PB#{ch_idx}"
-                    loc_desc = m_num.group(2).strip()
-
-                    if is_valid_probe_label(loc_desc) and ch_key in probe_cols:
-                        formatted_label = f"#{ch_idx} (°C) {loc_desc}" if not loc_desc.startswith("#") else loc_desc
-                        if ch_key not in probe_locations or len(formatted_label) > len(probe_locations[ch_key]):
-                            probe_locations[ch_key] = formatted_label
-
-        except Exception:
-            continue
-
-    # Fill fallback probe locations if missing
-    for col in probe_cols:
-        if col not in probe_locations or not probe_locations[col]:
-            probe_locations[col] = f"Channel {col.replace('PB#', '')} (Unlabeled)"
 
     # 5. STRICT PRIORITY AUTOMATIC FURNACE SELECTION LOGIC
     recipe_corpus = f"{process_settings} {clean_comments_text} {filename}"
