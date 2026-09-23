@@ -183,33 +183,26 @@ def extract_probe_series_autonomously(decomp_bytes):
     return best_series
 
 def format_dwell_time(total_seconds):
-    if pd.isna(total_seconds) or total_seconds == 0:
-        return "00:00:00"
+    if pd.isna(total_seconds) or total_seconds == 0: return "00:00:00"
     m, s = divmod(total_seconds, 60)
     h, m = divmod(m, 60)
     return f"{int(h):02d}:{int(m):02d}:{int(s):02d}"
 
 def parse_operator_and_metadata(comments_list):
     """Extract Operator, Company, Site and Clean the Notes"""
-    combined = "\n".join(comments_list)
+    combined = " ".join(comments_list)
     op, comp, site = "N/A", "N/A", "N/A"
     
-    # Extract Site
     m_site = re.search(r'(Power\s+Chonburi|Chonburi|Plant\s+\d+|Factory\s+\d+)', combined, re.IGNORECASE)
     if m_site: site = m_site.group(1).strip()
     
-    # Extract Company
     m_comp = re.search(r'\b(VSTS|Datapaq)\b', combined, re.IGNORECASE)
     if m_comp: comp = m_comp.group(1).strip()
     
-    # Extract Operator
     m_op = re.search(r'\b(Sunisa|[A-Z][a-z]{3,15})\b\s+(?:Monthly|WK|date|product|validation|run|test)', combined, re.IGNORECASE)
-    if m_op:
-        op = m_op.group(1).strip()
-    elif "Sunisa" in combined:
-        op = "Sunisa"
+    if m_op: op = m_op.group(1).strip()
+    elif "Sunisa" in combined: op = "Sunisa"
 
-    # Remove extracted tokens from text
     clean_notes = combined
     for token in [op, comp, site]:
         if token != "N/A":
@@ -242,7 +235,6 @@ def process_paq_file(file_bytes, filename):
 
     max_samples = max(len(v) for v in all_probes.values())
     aligned_probes = {k: (v + [np.nan] * (max_samples - len(v)) if len(v) < max_samples else v) for k, v in all_probes.items()}
-
     df_master = pd.DataFrame(aligned_probes)
     df_master.insert(0, "Time_Seconds", range(len(df_master)))
     df_master.insert(1, "Time_HHMMSS", pd.to_datetime(df_master["Time_Seconds"], unit='s').dt.strftime('%H:%M:%S'))
@@ -265,7 +257,7 @@ def process_paq_file(file_bytes, filename):
     detected_start_hhmmss = df_master[df_master["Time_Seconds"] == detected_start_sec].iloc[0]["Time_HHMMSS"]
 
     # 3. Stream Scanning Loop for Metadata, Recipe, Image, and Probe Locations
-    found_comments, found_recipes, found_probes = [], [], []
+    raw_texts = []
     embedded_img = None
 
     for stream_path in ole.listdir():
@@ -289,62 +281,81 @@ def process_paq_file(file_bytes, filename):
                             break
                         except Exception: pass
 
-            # Extract ASCII Strings from decompressed stream
+            # Extract ASCII Strings
             ascii_matches = re.findall(rb'[\x20-\x7E]{4,}', data_b)
             for m in ascii_matches:
-                s_raw = m.decode('ascii', errors='ignore').strip()
-                
-                # A) CLEAN SYSTEM CLASSES AND PATH NOISE
-                s_raw = re.sub(r'\b(CAxisCustomUnits|CPaqfile|CByteDataArray|CProbeResult|CFurnaceRecipe|CZoom|CProbeMapEntry|cho1-sv|CProcessFile|COven|CZone|CRecipe)\b', '', s_raw).strip()
-                s_raw = re.sub(r'#\d{5}\b', '', s_raw).strip()
-                
-                if not s_raw or len(s_raw) < 3: continue
-
-                # B) SKIP FILE PATHS
-                if re.search(r'\b[A-Z]:\\[A-Za-z0-9\\]', s_raw, re.IGNORECASE) or \
-                   re.search(r'\\\\', s_raw) or \
-                   re.search(r'\.(ovn|prd|pro|rec|paq)\b', s_raw, re.IGNORECASE):
-                    continue
-
-                # C) ROUTE TEXT TO CORRECT BUCKETS
-                # 1. Probes (Starts with #1 to #8 or PB#1)
-                if re.match(r'^#?[1-8]\s*[\(°C\)]', s_raw) or re.match(r'^PB#[1-8]', s_raw, re.IGNORECASE):
-                    if s_raw not in found_probes:
-                        found_probes.append(s_raw)
-                        
-                # 2. Recipes (Contains Process Setup Keywords)
-                elif any(kw in s_raw for kw in ["O2 Exit", "ppm", "CV speed", "mm/min", "N2 Flow", "WJ Flow", "Top Temp", "Bot temp", "SP2", "SP1", "==>"]):
-                    if s_raw not in found_recipes:
-                        found_recipes.append(s_raw)
-                        
-                # 3. Comments (General clean strings)
-                else:
-                    # Filter out digital repeating gibberish
-                    if not re.search(r'(.)\1{4,}', s_raw) and not re.search(r'^[0-9\W]+$', s_raw):
-                        if s_raw not in found_comments:
-                            found_comments.append(s_raw)
-        except Exception:
+                raw_texts.append(m.decode('ascii', errors='ignore').strip())
+        except:
             continue
 
-    # Process and Map Probes
+    found_comments = []
+    found_recipes = []
+    found_probes = []
+
+    for s in raw_texts:
+        # Reject paths
+        if re.search(r'\\\\|\b[A-Z]:\\', s): continue
+        if re.search(r'\.(ovn|prd|pro|rec|paq|jpg|png|bmp)\b', s, re.IGNORECASE): continue
+        if re.search(r'\\Users\\', s, re.IGNORECASE): continue
+        
+        # Split by C++ classes that merge text
+        parts = re.split(r'\b(?:CProbe|CSampleInterval|CAxisCustomUnits|CPaqfile|CByteDataArray|CProbeResult|CFurnaceRecipe|CZoom|CProbeMapEntry\w*|cho1-sv|CProcessFile|COven|CZone|CRecipe|CProduct)\b', s)
+        
+        for p in parts:
+            p = p.strip()
+            p = re.sub(r'^[>#;\.,\|]+', '', p).strip() 
+            if len(p) < 3: continue
+            
+            # Reject Gibberish
+            if re.search(r'(.)\1{4,}', p): continue 
+            if re.search(r'^[0-9\W]+$', p): continue 
+            if re.search(r'[@^\$|~<>{}]{2,}', p): continue 
+            if len(p) > 20 and ' ' not in p: continue
+            
+            # Remove isolated binary ID tags
+            p = re.sub(r'#\d{4,}', '', p).strip()
+            if not p: continue
+            
+            # Classify Routing
+            is_recipe = re.search(r'\b(O2 Exit|ppm|CV speed|mm/min|N2 Flow|WJ Flow|Top Temp|Bot temp|SP1|SP2\s*==>)\b', p, re.IGNORECASE)
+            is_probe = re.search(r'\b(cooler|drill&insert|inside H/D)\b', p, re.IGNORECASE)
+            
+            if is_recipe:
+                if p not in found_recipes: found_recipes.append(p)
+            elif is_probe:
+                if p not in found_probes: found_probes.append(p)
+            else:
+                if p not in found_comments: found_comments.append(p)
+
+    # Map Probes
     probe_locations = {}
-    for s in found_probes:
-        # Match pattern: "#1 (°C) Bottom cooler..."
-        m = re.match(r'^#?([1-8])\s*[\(°C\)]*\s*[-:]?\s*(.+)', s)
+    
+    # Pass 1: Assign Explicitly Numbered Probes (e.g. #1 (°C))
+    for p in found_probes:
+        m = re.search(r'^#?([1-8])\s*[\(°C\)]*\s*[-:]?\s*(.+)', p)
         if m:
-            ch_key = f"PB#{m.group(1)}"
+            idx = int(m.group(1))
+            ch_key = f"PB#{idx}"
             loc_desc = m.group(2).strip()
-            label = f"#{m.group(1)} (°C) {loc_desc}"
-            # Keep the most descriptive version
+            label = f"#{idx} (°C) {loc_desc}"
             if ch_key not in probe_locations or len(label) > len(probe_locations[ch_key]):
                 probe_locations[ch_key] = label
-
-    # Fill fallback probe locations if missing
+                
+    # Pass 2: Assign Sequential Probes (Missing explicit numbers)
+    unassigned_probes = [p for p in found_probes if not re.search(r'^#?[1-8]\s*[\(°C\)]', p)]
+    assigned_idx = 1
+    for p in unassigned_probes:
+        while f"PB#{assigned_idx}" in probe_locations and assigned_idx <= 8:
+            assigned_idx += 1
+        if assigned_idx > 8: break
+        probe_locations[f"PB#{assigned_idx}"] = f"#{assigned_idx} (°C) {p}"
+        assigned_idx += 1
+        
     for col in probe_cols:
         if col not in probe_locations:
             probe_locations[col] = f"Channel {col.replace('PB#', '')} (Unlabeled)"
 
-    # Finalize Metadata
+    # Finalize Metadata text
     operator_name, company, site, clean_comments_text = parse_operator_and_metadata(found_comments)
     process_settings = "\n".join(found_recipes) if found_recipes else "Standard Recipe Parameters"
 
@@ -374,7 +385,6 @@ def process_paq_file(file_bytes, filename):
             furnace_id = f"NB{f_match.group(1)}"
             furnace_variant = furnace_id
 
-    # Retrieve and apply overrides
     base_cfg = FURNACE_CONFIGS.get(furnace_id, FURNACE_CONFIGS["NB3"])
     cfg = dict(base_cfg)
 
@@ -487,7 +497,7 @@ else:
             m1.text_input("👤 Operator Name", data1["operator_name"], disabled=True)
             m2.text_input("🏢 Company", data1["company"], disabled=True)
             m3.text_input("📍 Site", data1["site"], disabled=True)
-            st.text_area("💬 Additional Comments / Notes", data1["operator_comment"], height=200)
+            st.text_area("💬 Additional Comments / Notes", data1["operator_comment"], height=160)
             st.text_area("⚙️ Recipe / Process Settings", data1["process_settings"], height=200)
 
         with col_b:
