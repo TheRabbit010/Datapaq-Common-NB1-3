@@ -27,7 +27,7 @@ GROUP_COLORS = {
     "Cooling": "rgba(173, 216, 230, 0.30)"
 }
 
-# Furnace Configurations Database (NB1, NB2, NB3)
+# Furnace Configurations Database (NB1, NB2, NB3 Base)
 FURNACE_CONFIGS = {
     "NB1": {
         "line_speed_mpm": 1.400,
@@ -62,7 +62,8 @@ FURNACE_CONFIGS = {
             {"Stage": "Brazing", "Start (m)": 21.81, "End (m)": 42.97, "thresh": 577.0},
         ],
         "trigger_temp_brazing": 577.0,
-        "dryer_dwell_thresh": 200.0,
+        "dryer_dwell_thresh_1": 200.0,
+        "dryer_dwell_thresh_2": None,
         "debinder_dwell_thresh": 300.0,
         "brazing_dwell_thresh_1": 550.0,
         "brazing_dwell_thresh_2": 577.0,
@@ -94,7 +95,8 @@ FURNACE_CONFIGS = {
             {"Stage": "Brazing", "Start (m)": 8.73, "End (m)": 30.33, "thresh": 577.0},
         ],
         "trigger_temp_brazing": 577.0,
-        "dryer_dwell_thresh": 200.0,
+        "dryer_dwell_thresh_1": 200.0,
+        "dryer_dwell_thresh_2": None,
         "debinder_dwell_thresh": None,
         "brazing_dwell_thresh_1": 550.0,
         "brazing_dwell_thresh_2": 577.0,
@@ -128,7 +130,8 @@ FURNACE_CONFIGS = {
             {"Stage": "Brazing", "Start (m)": 9.14, "End (m)": 29.98, "thresh": 577.0},
         ],
         "trigger_temp_brazing": 577.0,
-        "dryer_dwell_thresh": 200.0,
+        "dryer_dwell_thresh_1": 150.0,
+        "dryer_dwell_thresh_2": 200.0,
         "debinder_dwell_thresh": None,
         "brazing_dwell_thresh_1": 550.0,
         "brazing_dwell_thresh_2": 577.0,
@@ -307,7 +310,7 @@ def process_paq_file(file_bytes, filename):
             except Exception:
                 continue
 
-    # 4. Furnace Identification
+    # 4. Furnace & Sub-Type Identification with Dynamic Threshold Overrides
     furnace_id = "NB3"
     recipe_corpus = f"{process_settings} {operator_comment} {filename}"
     f_match = re.search(r'NB\s*Furnace\s*0?([123])\b|NB\s*#?\s*0?([123])\b|NB-0?([123])\b', recipe_corpus, re.IGNORECASE)
@@ -315,7 +318,31 @@ def process_paq_file(file_bytes, filename):
         num = [g for g in f_match.groups() if g is not None][0]
         furnace_id = f"NB{num}"
 
-    cfg = FURNACE_CONFIGS.get(furnace_id, FURNACE_CONFIGS["NB3"])
+    base_cfg = FURNACE_CONFIGS.get(furnace_id, FURNACE_CONFIGS["NB3"])
+    cfg = dict(base_cfg)
+    furnace_variant = furnace_id
+
+    # Check for specific NB3 Sub-types (BTM vs KE8/M2/EVO)
+    if furnace_id == "NB3":
+        if re.search(r'\bBTM\b', recipe_corpus, re.IGNORECASE):
+            furnace_variant = "NB3 (BTM)"
+            cfg["dryer_dwell_thresh_1"] = 250.0
+            cfg["dryer_dwell_thresh_2"] = 300.0
+            cfg["debinder_dwell_thresh"] = None
+            cfg["brazing_dwell_thresh_1"] = 577.0
+            cfg["brazing_dwell_thresh_2"] = 591.0
+            cfg["brazing_dwell_thresh_3"] = 600.0
+            cfg["trigger_temp_brazing"] = 577.0
+        elif re.search(r'\b(KE8|M2|EVO)\b', recipe_corpus, re.IGNORECASE):
+            furnace_variant = "NB3 (KE8/M2/EVO)"
+            cfg["dryer_dwell_thresh_1"] = 150.0
+            cfg["dryer_dwell_thresh_2"] = 200.0
+            cfg["debinder_dwell_thresh"] = None
+            cfg["brazing_dwell_thresh_1"] = 550.0
+            cfg["brazing_dwell_thresh_2"] = 577.0
+            cfg["brazing_dwell_thresh_3"] = 591.0
+            cfg["trigger_temp_brazing"] = 577.0
+
     line_speed_mpm = cfg["line_speed_mpm"]
 
     # Speed override from recipe
@@ -348,6 +375,8 @@ def process_paq_file(file_bytes, filename):
         "df_master": df_master,
         "probe_cols": probe_cols,
         "furnace_id": furnace_id,
+        "furnace_variant": furnace_variant,
+        "cfg": cfg,
         "line_speed_mpm": line_speed_mpm,
         "detected_start_sec": detected_start_sec,
         "detected_start_hhmmss": detected_start_hhmmss,
@@ -384,15 +413,15 @@ else:
         st.stop()
 
     df_m1 = data1["df_master"]
-    f_id = data1["furnace_id"]
-    cfg = FURNACE_CONFIGS[f_id]
+    f_variant = data1["furnace_variant"]
+    cfg = data1["cfg"]
     zones = cfg["zones"]
     probe_cols = data1["probe_cols"]
 
     # Top Metrics Banner
     st.success(f"✓ File Loaded Successfully: **{data1['filename']}**")
     m_col1, m_col2, m_col3, m_col4 = st.columns(4)
-    m_col1.metric("Confirmed Furnace", f_id)
+    m_col1.metric("Confirmed Furnace", f_variant)
     m_col2.metric("Conveyor Speed", f"{data1['line_speed_mpm']:.3f} m/min")
     m_col3.metric("Lead Probe Entrance", f"{data1['first_probe_name']} @ {data1['detected_start_hhmmss']}")
     m_col4.metric("Total Duration", f"{len(df_m1)}s (~{len(df_m1)/60:.1f} min)")
@@ -437,7 +466,7 @@ else:
                        annotation_text=f"Brazing ({cfg['trigger_temp_brazing']}°C)", annotation_position="bottom right")
 
         fig1.update_layout(
-            title=f"GLOBAL FURNACE PROFILE ({f_id}): {data1['filename']}",
+            title=f"GLOBAL FURNACE PROFILE ({f_variant}): {data1['filename']}",
             xaxis_title="Furnace Distance (Meters from Entrance)", yaxis_title="Temperature (°C)",
             hovermode="x unified", template="plotly_white", height=550
         )
@@ -468,7 +497,7 @@ else:
             )
 
         fig2.update_layout(
-            title=f"INDIVIDUALLY ALIGNED PROFILES ({f_id}): {data1['filename']}",
+            title=f"INDIVIDUALLY ALIGNED PROFILES ({f_variant}): {data1['filename']}",
             xaxis_title="Individual Probe Distance (Meters from Probe's 60°C Entry)", yaxis_title="Temperature (°C)",
             hovermode="x unified", template="plotly_white", height=550
         )
@@ -543,7 +572,7 @@ else:
             st.dataframe(df_zone_summary, use_container_width=True)
 
         st.markdown("---")
-        st.subheader("⏱️ Inspection Matrix (Stage Max Temps & Dwell Times)")
+        st.subheader(f"⏱️ Inspection Matrix — {f_variant}")
         stages = cfg["stages"]
         dryer_info = next((s for s in stages if s["Stage"] == "Dryer"), stages[0])
         brazing_info = next((s for s in stages if s["Stage"] == "Brazing"), stages[-1])
@@ -555,11 +584,31 @@ else:
         for col in probe_cols:
             r = {"Probe": col}
             r["Dryer Max (°C)"] = round(dryer_df[col].max(), 1) if not dryer_df.empty else np.nan
-            r[f"Dryer Dwell (≥{int(cfg['dryer_dwell_thresh'])}°C)"] = format_dwell_time((dryer_df[col] >= cfg['dryer_dwell_thresh']).sum())
+            
+            # Dynamic Dryer Threshold Dwells
+            dt1 = cfg.get("dryer_dwell_thresh_1")
+            if dt1 is not None:
+                r[f"Dryer Dwell (≥{int(dt1)}°C)"] = format_dwell_time((dryer_df[col] >= dt1).sum()) if not dryer_df.empty else "00:00:00"
+            
+            dt2 = cfg.get("dryer_dwell_thresh_2")
+            if dt2 is not None:
+                r[f"Dryer Dwell (≥{int(dt2)}°C)"] = format_dwell_time((dryer_df[col] >= dt2).sum()) if not dryer_df.empty else "00:00:00"
+
             r["Brazing Max (°C)"] = round(brazing_df[col].max(), 1) if not brazing_df.empty else np.nan
-            r[f"Brazing Dwell (≥{int(cfg['brazing_dwell_thresh_1'])}°C)"] = format_dwell_time((brazing_df[col] >= cfg['brazing_dwell_thresh_1']).sum())
-            r[f"Brazing Dwell (≥{int(cfg['brazing_dwell_thresh_2'])}°C)"] = format_dwell_time((brazing_df[col] >= cfg['brazing_dwell_thresh_2']).sum())
-            r[f"Brazing Dwell (≥{int(cfg['brazing_dwell_thresh_3'])}°C)"] = format_dwell_time((brazing_df[col] >= cfg['brazing_dwell_thresh_3']).sum())
+            
+            # Dynamic Brazing Threshold Dwells
+            bt1 = cfg.get("brazing_dwell_thresh_1")
+            if bt1 is not None:
+                r[f"Brazing Dwell (≥{int(bt1)}°C)"] = format_dwell_time((brazing_df[col] >= bt1).sum()) if not brazing_df.empty else "00:00:00"
+            
+            bt2 = cfg.get("brazing_dwell_thresh_2")
+            if bt2 is not None:
+                r[f"Brazing Dwell (≥{int(bt2)}°C)"] = format_dwell_time((brazing_df[col] >= bt2).sum()) if not brazing_df.empty else "00:00:00"
+            
+            bt3 = cfg.get("brazing_dwell_thresh_3")
+            if bt3 is not None:
+                r[f"Brazing Dwell (≥{int(bt3)}°C)"] = format_dwell_time((brazing_df[col] >= bt3).sum()) if not brazing_df.empty else "00:00:00"
+
             matrix_rows.append(r)
 
         df_matrix = pd.DataFrame(matrix_rows)
@@ -603,7 +652,7 @@ else:
     with tabs[4]:
         st.subheader("💾 Unified 1-Row Dataset (Database Ready)")
         row_data = {
-            "File_Name": data1["filename"], "Furnace_Type": f_id,
+            "File_Name": data1["filename"], "Furnace_Type": f_variant,
             "Entrance_Time": data1["detected_start_hhmmss"], "Line_Speed_MPM": data1["line_speed_mpm"]
         }
         for pb in [f"PB{i}" for i in range(1, 9)]:
