@@ -20,10 +20,9 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Inject Custom CSS for UI Enhancements
+# Inject Custom CSS to make Metrics larger and bolder
 st.markdown("""
 <style>
-/* 1. Make Main Metrics Larger */
 div[data-testid="stMetricValue"] {
     font-size: 2.8rem !important;
     font-weight: 700 !important;
@@ -33,7 +32,7 @@ div[data-testid="stMetricLabel"] {
     font-weight: 500 !important;
     color: #a0aab2 !important;
 }
-/* 2. Style for Reset Button */
+/* Style for Reset Button */
 div.stButton > button:first-child {
     background-color: #ff4b4b;
     color: white;
@@ -46,12 +45,12 @@ div.stButton > button:first-child:hover {
     background-color: #ff3333;
     border-color: #ff3333;
 }
-/* 3. Make Tab Headers Larger */
+/* Make Tab Headers Larger */
 button[data-baseweb="tab"] {
     font-size: 1.2rem !important;
     font-weight: 600 !important;
 }
-/* 4. Make Success Message Text Larger */
+/* Make Success Message Text Larger */
 div[data-testid="stAlert"] {
     font-size: 1.3rem !important;
     font-weight: 500 !important;
@@ -72,7 +71,7 @@ PROBE_COLORS = {
     "PB#8": "#00ffff"  # Cyan
 }
 
-# Group Color Definitions for Plotly Graphs
+# Group Color Definitions for Plotly Graphs (Adjusted for Dark Mode)
 GROUP_COLORS = {
     "Dryer": "rgba(255, 235, 156, 0.15)",
     "Debinder": "rgba(255, 199, 119, 0.15)",
@@ -311,7 +310,6 @@ def process_paq_file(file_bytes, filename):
     df_master = pd.DataFrame(aligned_probes)
     df_master.insert(0, "Time_Seconds", range(len(df_master)))
     
-    # Calculate proper Datetime stamps for Plotly Native Time formatting
     base_date = pd.Timestamp("1970-01-01 00:00:00")
     df_master.insert(1, "Time_Stamp", base_date + pd.to_timedelta(df_master["Time_Seconds"], unit="s"))
     df_master.insert(2, "Time_HHMMSS", df_master["Time_Stamp"].dt.strftime('%H:%M:%S'))
@@ -528,18 +526,15 @@ else:
     m_col2.metric("Conveyor Speed", f"{data1['line_speed_mpm']:.3f} m/min")
     m_col3.metric("Time in Furnace", f"{furnace_duration_secs}s (~{furnace_duration_mins:.1f} min)")
 
-    tabs = st.tabs(["📊 Profile Graphs", "📝 Metadata & Probe Map", "🏭 Zone & Stage Summary", "📈 Statistics & Boxplots", "💾 Master Dataset & Export", "⚖️ Compare Files"])
+    tabs = st.tabs(["📊 Profile Graphs", "🏭 Zone & Stage Summary", "📈 Statistics & Boxplots", "💾 Master Dataset & Export", "⚖️ Compare Files"])
 
     with tabs[0]:
         st.subheader("Global Furnace Profile")
         
-        # Dual-Axis Global Profile Chart (Time & Distance)
         fig1 = go.Figure()
-        
-        # Compute exact final timestamp for boundaries
         end_time_stamp = pd.Timestamp("1970-01-01 00:00:00") + pd.to_timedelta(furnace_duration_secs + 120, unit="s")
-        
         custom_hover1 = np.stack((df_m1["Time_HHMMSS"], df_m1["Time_Seconds"], df_m1["Distance_Meters"]), axis=-1)
+        
         for col in probe_cols:
             fig1.add_trace(go.Scatter(
                 x=df_m1["Time_Stamp"], 
@@ -563,12 +558,9 @@ else:
         
         fig1.add_hline(y=cfg["trigger_temp_brazing"], line_dash="dash", line_color="red", annotation_text=f"Brazing ({cfg['trigger_temp_brazing']}°C)", annotation_position="bottom right")
 
-        # ---------------------------------------------------------
-        # APPLYING DUAL AXIS FIX FOR OVERLAPPING X-AXES
-        # ---------------------------------------------------------
         fig1.update_layout(
             title=f"GLOBAL FURNACE PROFILE ({f_variant}): {data1['filename']}",
-            yaxis=dict(title="Temperature (°C)", domain=[0.15, 1.0]), # Shrink Y-axis to make room for second X-axis at the bottom
+            yaxis=dict(title="Temperature (°C)", domain=[0.15, 1.0]),
             hovermode="x unified",
             template="plotly_dark",
             height=600,
@@ -583,20 +575,41 @@ else:
                 title="Distance (Meters)",
                 overlaying="x",
                 side="bottom",
-                position=0.0, # Sits safely below the first X-axis
+                position=0.0,
                 anchor="free",
                 range=[0, total_furnace_length + (120 * data1['line_speed_mpm'] / 60)]
             )
         )
         
-        # Invisible trace to enforce the Distance (X2) scale properly
         fig1.add_trace(go.Scatter(x=df_m1["Distance_Meters"], y=df_m1[probe_cols[0]] * 0, showlegend=False, opacity=0, xaxis="x2", hoverinfo='skip'))
-        
         st.plotly_chart(fig1, use_container_width=True)
+        st.markdown("---")
+        
+        # === MOVED METADATA AND PROBE SETTINGS INTO TAB 0 HERE ===
+        col_a, col_b = st.columns(2)
+        with col_a:
+            st.subheader("👤 Operator Info")
+            m1, m2, m3 = st.columns(3)
+            m1.text_input("Name", data1["operator_name"], disabled=True)
+            m2.text_input("Company", data1["company"], disabled=True)
+            m3.text_input("Site", data1["site"], disabled=True)
+            st.text_area("💬 Comments", data1["operator_comment"], height=120)
+            st.text_area("⚙️ Recipe", data1["process_settings"], height=200)
+
+        with col_b:
+            st.subheader("📍 Probe Locations")
+            if data1["probe_locations"]:
+                sorted_probes = sorted(data1["probe_locations"].items(), key=lambda x: int(x[0].replace("PB#", "")) if x[0].replace("PB#", "").isdigit() else 0)
+                st.dataframe(pd.DataFrame([{"Channel": k, "Attached Location": v} for k, v in sorted_probes]), use_container_width=True, hide_index=True)
+            else:
+                st.info("No explicit probe location mapping found in PAQ header.")
+            if data1["embedded_img"]:
+                st.subheader("🖼️ PAQ Image")
+                st.image(data1["embedded_img"], use_container_width=True)
 
         st.markdown("---")
         
-        show_indiv_chart = st.toggle("👁️ Show / Hide Individually Aligned Probe Chart", value=True)
+        show_indiv_chart = st.toggle("👁️ Show / Hide Individually Aligned Chart", value=True)
         if show_indiv_chart:
             st.subheader("Individually Aligned Probe Chart (Own 60°C Entry)")
             fig2 = go.Figure()
@@ -612,33 +625,7 @@ else:
             st.plotly_chart(fig2, use_container_width=True)
 
     with tabs[1]:
-        col_a, col_b = st.columns(2)
-        with col_a:
-            st.subheader("📝 Operator Metadata & Recipe Settings")
-            m1, m2, m3 = st.columns(3)
-            m1.text_input("👤 Operator Name", data1["operator_name"], disabled=True)
-            m2.text_input("🏢 Company", data1["company"], disabled=True)
-            m3.text_input("📍 Site", data1["site"], disabled=True)
-            st.text_area("💬 Additional Comments / Notes", data1["operator_comment"], height=160)
-            st.text_area("⚙️ Recipe / Process Settings", data1["process_settings"], height=200)
-
-        with col_b:
-            st.subheader("📍 Thermocouple Channel Locations")
-            if data1["probe_locations"]:
-                sorted_probes = sorted(data1["probe_locations"].items(), key=lambda x: int(x[0].replace("PB#", "")) if x[0].replace("PB#", "").isdigit() else 0)
-                st.dataframe(pd.DataFrame([{"Channel": k, "Attached Location": v} for k, v in sorted_probes]), use_container_width=True, hide_index=True)
-            else:
-                st.info("No explicit probe location mapping found in PAQ header.")
-            if data1["embedded_img"]:
-                st.subheader("🖼️ Embedded PAQ Image")
-                st.image(data1["embedded_img"], use_container_width=True)
-
-        st.subheader("⏱️ Individual Probe Entry Alignment Table (60°C Entry)")
-        shift_rows = [{"Probe": col, "Start Time (HH:MM:SS)": info["Start_HHMMSS"], "Start Sec": f"{info['Start_Sec']}s", "Lag Time vs First": f"+{info['Offset_Sec']}s" if info['Offset_Sec'] > 0 else "0s (Lead)", "Distance Shift": f"+{info['Offset_Meters']:.2f} m" if info['Offset_Meters'] > 0 else "0.00 m (Lead)", "Status": "🏆 First (Lead)" if info["Is_First"] else f"+{info['Offset_Meters']:.2f} m lag"} for col, info in data1["probe_start_info"].items()]
-        st.dataframe(pd.DataFrame(shift_rows), use_container_width=True, hide_index=True)
-
-    with tabs[2]:
-        st.subheader("🔥 Zone Peak Temperature Table")
+        st.subheader("🔥 Zone Peak Temperatures")
         zone_max_records = []
         for z in zones:
             z_df = df_m1[(df_m1["Distance_Meters"] >= z["start"]) & (df_m1["Distance_Meters"] < round(z["start"] + z["length"], 2))]
@@ -683,8 +670,14 @@ else:
                 if bt is not None: r[f"Brazing Dwell (≥{int(bt)}°C)"] = format_dwell_time((brazing_df[col] >= bt).sum()) if not brazing_df.empty else "00:00:00"
             matrix_rows.append(r)
         st.dataframe(pd.DataFrame(matrix_rows), use_container_width=True, hide_index=True)
+        
+        st.markdown("---")
+        # === MOVED INDIVIDUAL ENTRY ALIGNMENT TABLE INTO TAB 1 ===
+        st.subheader("⏱️ Entry Alignment (60°C)")
+        shift_rows = [{"Probe": col, "Start Time (HH:MM:SS)": info["Start_HHMMSS"], "Start Sec": f"{info['Start_Sec']}s", "Lag Time vs First": f"+{info['Offset_Sec']}s" if info['Offset_Sec'] > 0 else "0s (Lead)", "Distance Shift": f"+{info['Offset_Meters']:.2f} m" if info['Offset_Meters'] > 0 else "0.00 m (Lead)", "Status": "🏆 First (Lead)" if info["Is_First"] else f"+{info['Offset_Meters']:.2f} m lag"} for col, info in data1["probe_start_info"].items()]
+        st.dataframe(pd.DataFrame(shift_rows), use_container_width=True, hide_index=True)
 
-    with tabs[3]:
+    with tabs[2]:
         st.subheader("📈 Temperature Distribution Boxplot by Probe")
         fig_box = go.Figure()
         for idx, col in enumerate(probe_cols):
@@ -704,7 +697,7 @@ else:
                     stats_list.append({"Zone #": z["num"], "Zone Name": z["name"], "Group": z["group"], "Avg Temp (°C)": round(np.mean(z_vals), 2), "Std Dev (°C)": round(np.std(z_vals, ddof=1), 2), "Min Temp (°C)": round(np.min(z_vals), 2), "Max Temp (°C)": round(np.max(z_vals), 2), "Data Points": len(z_vals)})
         st.dataframe(pd.DataFrame(stats_list), use_container_width=True, hide_index=True)
 
-    with tabs[4]:
+    with tabs[3]:
         st.subheader("💾 Unified 1-Row Dataset (Database Ready)")
         row_data = {"File_Name": data1["filename"], "Furnace_Type": f_variant, "Operator_Name": data1["operator_name"], "Company": data1["company"], "Site": data1["site"], "Entrance_Time": data1["detected_start_hhmmss"], "Line_Speed_MPM": data1["line_speed_mpm"]}
         for pb in [f"PB{i}" for i in range(1, 9)]:
@@ -722,7 +715,7 @@ else:
             pd.DataFrame(matrix_rows).to_excel(writer, sheet_name="Inspection_Matrix", index=False)
         st.download_button(label="📥 Download Complete Excel Report", data=buffer.getvalue(), file_name=f"{os.path.splitext(data1['filename'])[0]}_Analysis.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-    with tabs[5]:
+    with tabs[4]:
         st.subheader("⚖️ Compare Profiles Across Two Files")
         if not uploaded_file2: st.info("👈 Upload a second `.paq` file in the sidebar to view comparison graph.")
         else:
