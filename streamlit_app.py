@@ -195,7 +195,7 @@ def clean_paq_text(raw_text):
     
     text = re.split(r'\\\\', raw_text)[0]
     
-    # Split by common OLE tags / structural artifacts
+    # Split by common OLE tags / structural artifacts to prevent concatenations
     parts = re.split(r'\b(?:CProbe|CSampleInterval|CAxisCustomUnits|CPaqfile|CByteDataArray|CProbeResult|CFurnaceRecipe|CZoom|CProbeMapEntry\w*|cho1-sv|CProcessFile|COven|CZone|CRecipe|CProduct|CAnalysisParameters|CAlarmParameters|CAlarmProbes|CAlarmParametersTime|CRiseFallRange|CTemperatureLimits|CTimeLimits|CCustomUnits|CLineSpeed|COvenStart|CProcessOptimisation|CToleranceCurve)\b', text)
     
     cleaned_parts = []
@@ -204,17 +204,13 @@ def clean_paq_text(raw_text):
         p = re.sub(r'^[>#;\.,\|]+', '', p).strip() 
         if len(p) < 3: continue
         
-        # VERY AGGRESSIVE TRUNCATION: Stop immediately if hitting a system zone tag
-        if re.search(r'\b(Untitled|Entry Zone|XFER|WatCool|Exit curtain|AirCool|Exit Zone|Dryer#1|0Hl !@f|aaa\.\.\.)\b', p, re.IGNORECASE):
-            clean_segment = re.split(r'\b(Untitled|Entry Zone|XFER|WatCool|Exit curtain|AirCool|Exit Zone|Dryer#1|0Hl !@f|aaa\.\.\.)\b', p, flags=re.IGNORECASE)[0]
-            if clean_segment.strip():
-                cleaned_parts.append(clean_segment.strip())
-            break # Stop completely for this chunk
-            
         # Standard junk filtering
         if re.search(r'(.)\1{3,}', p): continue 
         if re.search(r'[@^\$|~<>{}\[\]]{2,}', p): continue 
         if re.search(r'^[0-9\W]+$', p): continue 
+        
+        # Remove specific zone headers
+        p = re.sub(r'\b(Untitled NB#\d Entry Zone|XFER|WatCool#\d|Exit curtain|AirCool#\d|Exit Zone|Dryer#\d|0Hl !@f|aaa\.\.\.)\b', '', p, flags=re.IGNORECASE)
         
         p = re.sub(r'#\d+', '', p)
         p = re.sub(r'\s+', ' ', p).strip()
@@ -225,7 +221,7 @@ def clean_paq_text(raw_text):
     return " ".join(cleaned_parts)
 
 def parse_operator_and_metadata(comments_list):
-    """Extract Operator, Company, Site and Clean the Notes"""
+    """Extract Operator, Company, Site, Clean Comments and Process Notes"""
     combined = " ".join(comments_list)
     op, comp, site = "N/A", "N/A", "N/A"
     
@@ -240,17 +236,26 @@ def parse_operator_and_metadata(comments_list):
     if m_op: op = m_op.group(1).strip()
     elif "Sunisa" in combined: op = "Sunisa"
 
-    # Aggressive cut for comments box
-    chopped_comment = re.split(r'\b(Untitled|Entry Zone)\b', combined, flags=re.IGNORECASE)[0]
-    
-    clean_notes = chopped_comment
+    # Remove extracted tokens from text
+    clean_notes = combined
     for token in [op, comp, site]:
         if token != "N/A":
             clean_notes = re.sub(rf'^\s*{re.escape(token)}\b\s*', '', clean_notes, flags=re.IGNORECASE)
             clean_notes = re.sub(rf'\s+\b{re.escape(token)}\b\s+', ' ', clean_notes, flags=re.IGNORECASE)
 
     clean_notes = clean_paq_text(clean_notes)
-    return op, comp, site, clean_notes if clean_notes else "N/A"
+
+    # Split general comments from specific process notes
+    split_match = re.search(r'(.*?)(Exit Dryer|BTM M48 gap250|Untitled Entry Zone)(.*)', clean_notes, re.IGNORECASE)
+    
+    if split_match:
+        comment_part = split_match.group(1).strip()
+        notes_part = (split_match.group(2) + split_match.group(3)).strip()
+    else:
+        comment_part = clean_notes
+        notes_part = ""
+
+    return op, comp, site, comment_part if comment_part else "N/A", notes_part if notes_part else "N/A"
 
 @st.cache_data
 def process_paq_file(file_bytes, filename):
@@ -386,11 +391,11 @@ def process_paq_file(file_bytes, filename):
         if col not in probe_locations:
             probe_locations[col] = f"Channel {col.replace('PB#', '')} (Unlabeled)"
 
-    operator_name, company, site, clean_comments_text = parse_operator_and_metadata(found_comments)
+    operator_name, company, site, clean_comments_text, process_notes_text = parse_operator_and_metadata(found_comments)
     process_settings = "\n".join(found_recipes) if found_recipes else "Standard Recipe Parameters"
 
     # 4. STRICT PRIORITY AUTOMATIC FURNACE SELECTION LOGIC
-    recipe_corpus = f"{process_settings} {clean_comments_text} {filename}"
+    recipe_corpus = f"{process_settings} {clean_comments_text} {process_notes_text} {filename}"
 
     furnace_id = "NB3"
     furnace_variant = "NB3"
@@ -456,7 +461,7 @@ def process_paq_file(file_bytes, filename):
         "line_speed_mpm": line_speed_mpm, "detected_start_sec": detected_start_sec,
         "detected_start_hhmmss": detected_start_hhmmss, "first_probe_name": first_probe_name,
         "operator_name": operator_name, "company": company, "site": site,
-        "operator_comment": clean_comments_text, "process_settings": process_settings,
+        "operator_comment": clean_comments_text, "process_notes": process_notes_text, "process_settings": process_settings,
         "probe_locations": probe_locations, "probe_start_info": probe_start_info,
         "embedded_img": embedded_img
     }
@@ -536,7 +541,8 @@ else:
             m1.text_input("👤 Operator Name", data1["operator_name"], disabled=True)
             m2.text_input("🏢 Company", data1["company"], disabled=True)
             m3.text_input("📍 Site", data1["site"], disabled=True)
-            st.text_area("💬 Additional Comments / Notes", data1["operator_comment"], height=160)
+            st.text_area("💬 Additional Comments", data1["operator_comment"], height=120)
+            st.text_area("📝 Process Notes", data1["process_notes"], height=120)
             st.text_area("⚙️ Recipe / Process Settings", data1["process_settings"], height=200)
 
         with col_b:
