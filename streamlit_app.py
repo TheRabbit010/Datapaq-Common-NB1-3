@@ -27,7 +27,7 @@ GROUP_COLORS = {
     "Cooling": "rgba(173, 216, 230, 0.30)"
 }
 
-# Furnace Configurations Database (NB1, NB2, NB3 Base)
+# Furnace Configurations Database (NB1, NB2, NB3 Base Profiles)
 FURNACE_CONFIGS = {
     "NB1": {
         "line_speed_mpm": 1.400,
@@ -62,12 +62,13 @@ FURNACE_CONFIGS = {
             {"Stage": "Brazing", "Start (m)": 21.81, "End (m)": 42.97, "thresh": 577.0},
         ],
         "trigger_temp_brazing": 577.0,
-        "dryer_dwell_thresh_1": 200.0,
-        "dryer_dwell_thresh_2": None,
+        "dryer_dwell_thresh_1": 150.0,
+        "dryer_dwell_thresh_2": 200.0,
         "debinder_dwell_thresh": 300.0,
         "brazing_dwell_thresh_1": 550.0,
         "brazing_dwell_thresh_2": 577.0,
         "brazing_dwell_thresh_3": 591.0,
+        "brazing_dwell_thresh_4": 600.0,
     },
     "NB2": {
         "line_speed_mpm": 1.560,
@@ -96,11 +97,12 @@ FURNACE_CONFIGS = {
         ],
         "trigger_temp_brazing": 577.0,
         "dryer_dwell_thresh_1": 200.0,
-        "dryer_dwell_thresh_2": None,
+        "dryer_dwell_thresh_2": 250.0,
         "debinder_dwell_thresh": None,
         "brazing_dwell_thresh_1": 550.0,
         "brazing_dwell_thresh_2": 577.0,
         "brazing_dwell_thresh_3": 591.0,
+        "brazing_dwell_thresh_4": 600.0,
     },
     "NB3": {
         "line_speed_mpm": 1.270,
@@ -136,6 +138,7 @@ FURNACE_CONFIGS = {
         "brazing_dwell_thresh_1": 550.0,
         "brazing_dwell_thresh_2": 577.0,
         "brazing_dwell_thresh_3": 591.0,
+        "brazing_dwell_thresh_4": 600.0,
     }
 }
 
@@ -310,42 +313,103 @@ def process_paq_file(file_bytes, filename):
             except Exception:
                 continue
 
-    # 4. Furnace & Sub-Type Identification with Dynamic Threshold Overrides
-    furnace_id = "NB3"
+    # 4. AUTOMATIC FURNACE & SUB-TYPE SELECTION LOGIC
     recipe_corpus = f"{process_settings} {operator_comment} {filename}"
-    f_match = re.search(r'NB\s*Furnace\s*0?([123])\b|NB\s*#?\s*0?([123])\b|NB-0?([123])\b', recipe_corpus, re.IGNORECASE)
-    if f_match:
-        num = [g for g in f_match.groups() if g is not None][0]
-        furnace_id = f"NB{num}"
 
-    base_cfg = FURNACE_CONFIGS.get(furnace_id, FURNACE_CONFIGS["NB3"])
-    cfg = dict(base_cfg)
-    furnace_variant = furnace_id
+    furnace_id = "NB3"  # Default fallback
+    furnace_variant = "NB3"
 
-    # Check for specific NB3 Sub-types (BTM vs KE8/M2/EVO)
-    if furnace_id == "NB3":
+    # Priority Pattern Rules Check:
+    # 1. RAD Check (Sub-variant of NB1)
+    if re.search(r'\bRAD\b', recipe_corpus, re.IGNORECASE):
+        furnace_id = "NB1"
+        furnace_variant = "NB1 (RAD)"
+
+    # 2. NB1 Check: YYMMDD, WKxx, CDS, KN9, 12SHP
+    elif (re.search(r'\b(CDS|KN9|12SHP)\b', recipe_corpus, re.IGNORECASE) or 
+          re.search(r'\bWK\d{1,2}\b', recipe_corpus, re.IGNORECASE) or 
+          re.search(r'\b\d{6}\b', recipe_corpus)):
+        furnace_id = "NB1"
+        furnace_variant = "NB1 (Standard)"
+
+    # 3. NB2 Check: Tahc, Utahc
+    elif re.search(r'\b(Tahc|Utahc)\b', recipe_corpus, re.IGNORECASE):
+        furnace_id = "NB2"
+        furnace_variant = "NB2 (Tahc/Utahc)"
+
+    # 4. NB3 Check: KE8, M2, EVO, BTM
+    elif re.search(r'\b(KE8|M2|EVO|BTM)\b', recipe_corpus, re.IGNORECASE):
+        furnace_id = "NB3"
         if re.search(r'\bBTM\b', recipe_corpus, re.IGNORECASE):
             furnace_variant = "NB3 (BTM)"
-            cfg["dryer_dwell_thresh_1"] = 250.0
-            cfg["dryer_dwell_thresh_2"] = 300.0
-            cfg["debinder_dwell_thresh"] = None
-            cfg["brazing_dwell_thresh_1"] = 577.0
-            cfg["brazing_dwell_thresh_2"] = 591.0
-            cfg["brazing_dwell_thresh_3"] = 600.0
-            cfg["trigger_temp_brazing"] = 577.0
-        elif re.search(r'\b(KE8|M2|EVO)\b', recipe_corpus, re.IGNORECASE):
+        else:
             furnace_variant = "NB3 (KE8/M2/EVO)"
-            cfg["dryer_dwell_thresh_1"] = 150.0
-            cfg["dryer_dwell_thresh_2"] = 200.0
-            cfg["debinder_dwell_thresh"] = None
-            cfg["brazing_dwell_thresh_1"] = 550.0
-            cfg["brazing_dwell_thresh_2"] = 577.0
-            cfg["brazing_dwell_thresh_3"] = 591.0
-            cfg["trigger_temp_brazing"] = 577.0
+
+    # Fallback to general regex tag check if no explicit product keywords match
+    else:
+        f_match = re.search(r'NB\s*Furnace\s*0?([123])\b|NB\s*#?\s*0?([123])\b|NB-0?([123])\b', recipe_corpus, re.IGNORECASE)
+        if f_match:
+            num = [g for g in f_match.groups() if g is not None][0]
+            furnace_id = f"NB{num}"
+            furnace_variant = furnace_id
+
+    # Retrieve base configuration and apply sub-type threshold overrides
+    base_cfg = FURNACE_CONFIGS.get(furnace_id, FURNACE_CONFIGS["NB3"])
+    cfg = dict(base_cfg)
+
+    if "RAD" in furnace_variant:
+        cfg["dryer_dwell_thresh_1"] = 150.0
+        cfg["dryer_dwell_thresh_2"] = 175.0
+        cfg["debinder_dwell_thresh"] = 200.0
+        cfg["brazing_dwell_thresh_1"] = 550.0
+        cfg["brazing_dwell_thresh_2"] = 583.0
+        cfg["brazing_dwell_thresh_3"] = 591.0
+        cfg["brazing_dwell_thresh_4"] = 600.0
+        cfg["trigger_temp_brazing"] = 577.0
+
+    elif "NB1" in furnace_variant:  # YYMMDD, WKxx, CDS, KN9, 12SHP
+        cfg["dryer_dwell_thresh_1"] = 150.0
+        cfg["dryer_dwell_thresh_2"] = 200.0
+        cfg["debinder_dwell_thresh"] = 300.0
+        cfg["brazing_dwell_thresh_1"] = 550.0
+        cfg["brazing_dwell_thresh_2"] = 577.0
+        cfg["brazing_dwell_thresh_3"] = 591.0
+        cfg["brazing_dwell_thresh_4"] = 600.0
+        cfg["trigger_temp_brazing"] = 577.0
+
+    elif "NB2" in furnace_variant:  # Tahc, Utahc
+        cfg["dryer_dwell_thresh_1"] = 200.0
+        cfg["dryer_dwell_thresh_2"] = 250.0
+        cfg["debinder_dwell_thresh"] = None
+        cfg["brazing_dwell_thresh_1"] = 550.0
+        cfg["brazing_dwell_thresh_2"] = 577.0
+        cfg["brazing_dwell_thresh_3"] = 591.0
+        cfg["brazing_dwell_thresh_4"] = 600.0
+        cfg["trigger_temp_brazing"] = 577.0
+
+    elif "BTM" in furnace_variant:  # NB3 BTM
+        cfg["dryer_dwell_thresh_1"] = 250.0
+        cfg["dryer_dwell_thresh_2"] = 300.0
+        cfg["debinder_dwell_thresh"] = None
+        cfg["brazing_dwell_thresh_1"] = 550.0
+        cfg["brazing_dwell_thresh_2"] = 577.0
+        cfg["brazing_dwell_thresh_3"] = 591.0
+        cfg["brazing_dwell_thresh_4"] = 600.0
+        cfg["trigger_temp_brazing"] = 577.0
+
+    elif "NB3" in furnace_variant:  # NB3 (KE8/M2/EVO)
+        cfg["dryer_dwell_thresh_1"] = 150.0
+        cfg["dryer_dwell_thresh_2"] = 200.0
+        cfg["debinder_dwell_thresh"] = None
+        cfg["brazing_dwell_thresh_1"] = 550.0
+        cfg["brazing_dwell_thresh_2"] = 577.0
+        cfg["brazing_dwell_thresh_3"] = 591.0
+        cfg["brazing_dwell_thresh_4"] = 600.0
+        cfg["trigger_temp_brazing"] = 577.0
 
     line_speed_mpm = cfg["line_speed_mpm"]
 
-    # Speed override from recipe
+    # Conveyor Speed Override from Recipe text
     cv_sp_matches = re.findall(r'CV\s*SP\s*[:=]?\s*(\d{3,4})\s*(?:mm/\s*min|mm)?', recipe_corpus, re.IGNORECASE)
     if cv_sp_matches:
         last_speed = float(cv_sp_matches[-1])
@@ -574,10 +638,14 @@ else:
         st.markdown("---")
         st.subheader(f"⏱️ Inspection Matrix — {f_variant}")
         stages = cfg["stages"]
+        has_debinder = any(s["Stage"] == "Debinder" for s in stages)
+        
         dryer_info = next((s for s in stages if s["Stage"] == "Dryer"), stages[0])
+        debinder_info = next((s for s in stages if s["Stage"] == "Debinder"), None) if has_debinder else None
         brazing_info = next((s for s in stages if s["Stage"] == "Brazing"), stages[-1])
 
         dryer_df = df_m1[(df_m1["Distance_Meters"] >= dryer_info["Start (m)"]) & (df_m1["Distance_Meters"] <= dryer_info["End (m)"])]
+        debinder_df = df_m1[(df_m1["Distance_Meters"] >= debinder_info["Start (m)"]) & (df_m1["Distance_Meters"] <= debinder_info["End (m)"])] if debinder_info else None
         brazing_df = df_m1[(df_m1["Distance_Meters"] >= brazing_info["Start (m)"]) & (df_m1["Distance_Meters"] <= brazing_info["End (m)"])]
 
         matrix_rows = []
@@ -594,6 +662,12 @@ else:
             if dt2 is not None:
                 r[f"Dryer Dwell (≥{int(dt2)}°C)"] = format_dwell_time((dryer_df[col] >= dt2).sum()) if not dryer_df.empty else "00:00:00"
 
+            # Debinder Stage Dwell (For NB1)
+            if has_debinder and debinder_df is not None:
+                d_thresh = cfg.get("debinder_dwell_thresh", 300.0) or 300.0
+                r["Debinder Max (°C)"] = round(debinder_df[col].max(), 1) if not debinder_df.empty else np.nan
+                r[f"Debinder Dwell (≥{int(d_thresh)}°C)"] = format_dwell_time((debinder_df[col] >= d_thresh).sum()) if not debinder_df.empty else "00:00:00"
+
             r["Brazing Max (°C)"] = round(brazing_df[col].max(), 1) if not brazing_df.empty else np.nan
             
             # Dynamic Brazing Threshold Dwells
@@ -608,6 +682,10 @@ else:
             bt3 = cfg.get("brazing_dwell_thresh_3")
             if bt3 is not None:
                 r[f"Brazing Dwell (≥{int(bt3)}°C)"] = format_dwell_time((brazing_df[col] >= bt3).sum()) if not brazing_df.empty else "00:00:00"
+
+            bt4 = cfg.get("brazing_dwell_thresh_4")
+            if bt4 is not None:
+                r[f"Brazing Dwell (≥{int(bt4)}°C)"] = format_dwell_time((brazing_df[col] >= bt4).sum()) if not brazing_df.empty else "00:00:00"
 
             matrix_rows.append(r)
 
