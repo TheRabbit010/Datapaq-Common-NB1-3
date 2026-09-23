@@ -20,10 +20,8 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Inject Custom CSS for UI Enhancements
 st.markdown("""
 <style>
-/* 1. Make Main Metrics Larger */
 div[data-testid="stMetricValue"] {
     font-size: 2.8rem !important;
     font-weight: 700 !important;
@@ -33,7 +31,6 @@ div[data-testid="stMetricLabel"] {
     font-weight: 500 !important;
     color: #a0aab2 !important;
 }
-/* 2. Style for Reset Button */
 div.stButton > button:first-child {
     background-color: #ff4b4b;
     color: white;
@@ -46,12 +43,10 @@ div.stButton > button:first-child:hover {
     background-color: #ff3333;
     border-color: #ff3333;
 }
-/* 3. Make Tab Headers Larger */
 button[data-baseweb="tab"] {
     font-size: 1.2rem !important;
     font-weight: 600 !important;
 }
-/* 4. Make Success Message Text Larger */
 div[data-testid="stAlert"] {
     font-size: 1.3rem !important;
     font-weight: 500 !important;
@@ -60,27 +55,19 @@ div[data-testid="stAlert"] {
 </style>
 """, unsafe_allow_html=True)
 
-# Map exact colors for Probes based on Datapaq standard
 PROBE_COLORS = {
-    "PB#1": "#ff0000", # Red
-    "PB#2": "#00ff00", # Light Green
-    "PB#3": "#0000ff", # Blue
-    "PB#4": "#8b4513", # Brown / Dark Orange
-    "PB#5": "#ff00ff", # Magenta
-    "PB#6": "#b8860b", # Olive / Dark Yellow
-    "PB#7": "#800080", # Purple
-    "PB#8": "#00ffff"  # Cyan
+    "PB#1": "#ff0000", "PB#2": "#00ff00", "PB#3": "#0000ff", "PB#4": "#8b4513", 
+    "PB#5": "#ff00ff", "PB#6": "#b8860b", "PB#7": "#800080", "PB#8": "#00ffff"
 }
 
-# Group Color Definitions for Plotly Graphs
 GROUP_COLORS = {
-    "Dryer": "rgba(255, 235, 156, 0.15)",
-    "Debinder": "rgba(255, 199, 119, 0.15)",
-    "Heating": "rgba(255, 160, 160, 0.15)",
-    "Cooling": "rgba(173, 216, 230, 0.15)"
+    "Dryer": "rgba(255, 235, 156, 0.15)", "Debinder": "rgba(255, 199, 119, 0.15)",
+    "Heating": "rgba(255, 160, 160, 0.15)", "Cooling": "rgba(173, 216, 230, 0.15)"
 }
 
-# Process Standards Database (PRCNVR Codes)
+# ==============================================================================
+# PROCESS STANDARDS & VALIDATION RULES
+# ==============================================================================
 STANDARD_SPECS = {
     "NB1 (RAD)": {
         "id": "PRCNVR02044",
@@ -109,7 +96,67 @@ STANDARD_SPECS = {
     }
 }
 
-# Furnace Configurations Database (NB1, NB2, NB3 Base Profiles)
+# Raw numeric bounds (Min, Max) for pandas styling evaluation
+VALIDATION_RULES = {
+    "NB1 (RAD)": {
+        "Dryer Max (°C)": (175, 260), "Debinder Max (°C)": (200, 375), "Brazing Max (°C)": (583, 607),
+        "Dryer Dwell (≥175°C)": (60, 99999), "Debinder Dwell (≥200°C)": (120, 99999),
+        "Brazing Dwell (≥577°C)": (150, 420), "Brazing Dwell (≥583°C)": (150, 99999),
+    },
+    "NB1 (CDS/KN9/12SHP)": {
+        "Dryer Max (°C)": (200, 350), "Debinder Max (°C)": (300, 375), "Brazing Max (°C)": (585, 607),
+        "Dryer Dwell (≥200°C)": (90, 99999), "Debinder Dwell (≥300°C)": (150, 99999), "Brazing Dwell (≥577°C)": (240, 465),
+    },
+    "NB3 (KE8/M2/EVO)": {
+        "Dryer Max (°C)": (200, 375), "Brazing Max (°C)": (598, 606),
+        "Dryer Dwell (≥200°C)": (90, 99999), "Brazing Dwell (≥550°C)": (420, 630),
+        "Brazing Dwell (≥577°C)": (270, 420), "Brazing Dwell (≥591°C)": (90, 240),
+    },
+    "NB2 (Tahc/Utahc)": {
+        "Dryer Max (°C)": (200, 375), "Brazing Max (°C)": (596, 604),
+        "Dryer Dwell (≥250°C)": (60, 99999), "Brazing Dwell (≥577°C)": (240, 420), "Brazing Dwell (≥591°C)": (90, 270),
+    },
+    "NB3 (BTM)": {
+        "Dryer Max (°C)": (300, 375), "Brazing Max (°C)": (595, 608),
+        "Dryer Dwell (≥300°C)": (120, 99999), "Brazing Dwell (≥577°C)": (240, 840),
+        "Brazing Dwell (≥591°C)": (120, 720), "Brazing Dwell (≥600°C)": (0, 480),
+    }
+}
+
+def style_inspection_matrix(row, variant):
+    styles = [''] * len(row)
+    rules = VALIDATION_RULES.get(variant, {})
+    
+    for i, col in enumerate(row.index):
+        if col == "Probe": continue
+        val = row[col]
+        rule = rules.get(col)
+        
+        is_fail = False
+        if pd.isna(val) or val == "00:00:00" or val == "" or val == 0:
+            if rule and rule[0] > 0: is_fail = True
+        else:
+            if rule:
+                min_v, max_v = rule
+                if "Max (°C)" in col:
+                    try:
+                        if not (min_v <= float(val) <= max_v): is_fail = True
+                    except: pass
+                elif "Dwell" in col:
+                    try:
+                        parts = str(val).split(':')
+                        if len(parts) == 3:
+                            total_s = int(parts[0])*3600 + int(parts[1])*60 + int(parts[2])
+                            if not (min_v <= total_s <= max_v): is_fail = True
+                    except: pass
+                    
+        if rule:
+            if is_fail:
+                styles[i] = 'background-color: rgba(255, 0, 0, 0.15); color: #ff4444; font-weight: bold;'
+            else:
+                styles[i] = 'color: #00e676;' # Green for Pass
+    return styles
+
 FURNACE_CONFIGS = {
     "NB1": {
         "line_speed_mpm": 1.400,
@@ -653,7 +700,9 @@ else:
             </div>
             """, unsafe_allow_html=True)
             
-        st.dataframe(pd.DataFrame(matrix_rows), use_container_width=True, hide_index=True)
+        df_matrix = pd.DataFrame(matrix_rows)
+        # Apply conditional formatting for easy visual inspection & copy-pasting
+        st.dataframe(df_matrix.style.apply(style_inspection_matrix, variant=f_variant, axis=1), use_container_width=True, hide_index=True)
         st.markdown("---")
         
         col_a, col_b = st.columns(2)
@@ -711,8 +760,11 @@ else:
             zone_max_records.append(r)
 
         df_zone_summary = pd.DataFrame(zone_max_records)
-        try: st.dataframe(df_zone_summary.style.background_gradient(cmap="OrRd", subset=probe_cols + ["Zone Peak (°C)"]).format({col: "{:.2f}" for col in probe_cols + ["Zone Peak (°C)"]}), use_container_width=True)
-        except Exception: st.dataframe(df_zone_summary, use_container_width=True)
+        try:
+            # Explicitly format numerical columns to 2 decimal places
+            st.dataframe(df_zone_summary.style.background_gradient(cmap="OrRd", subset=probe_cols + ["Zone Peak (°C)"]).format({col: "{:.2f}" for col in probe_cols + ["Zone Peak (°C)"]}), use_container_width=True)
+        except Exception: 
+            st.dataframe(df_zone_summary, use_container_width=True)
 
         st.markdown("---")
         st.subheader("⏱️ Entry Alignment (60°C)")
