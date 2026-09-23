@@ -517,6 +517,7 @@ else:
     furnace_duration_secs = int(furnace_duration_mins * 60)
 
     st.success(f"✓ File Loaded Successfully: **{data1['filename']}**")
+    
     m_col1, m_col2, m_col3 = st.columns(3)
     m_col1.metric("Confirmed Furnace", f_variant)
     m_col2.metric("Conveyor Speed", f"{data1['line_speed_mpm']:.3f} m/min")
@@ -538,17 +539,22 @@ else:
         st.plotly_chart(fig1, use_container_width=True)
 
         st.markdown("---")
-        st.subheader("Individually Aligned Probe Chart (Own 60°C Entry)")
-        fig2 = go.Figure()
-        for col in probe_cols:
-            offset_m = data1["probe_start_info"][col]["Offset_Meters"]
-            indiv_hover = np.stack((df_m1["Time_HHMMSS"], df_m1["Time_Seconds"], np.full(len(df_m1), offset_m)), axis=-1)
-            fig2.add_trace(go.Scatter(x=df_m1[f"Distance_{col}"], y=df_m1[col], mode="lines", name=f"{col} (+{offset_m:.2f}m)" if offset_m > 0 else f"{col} (Lead)", customdata=indiv_hover, hovertemplate="%{fullData.name}: %{y:.1f} °C<br>Indiv Dist: %{x:.2f} m<br>Time: %{customdata[0]}", line=dict(color=PROBE_COLORS.get(col))))
-        for z in zones:
-            z_color = GROUP_COLORS.get(z["group"], "rgba(200, 200, 200, 0.2)")
-            fig2.add_vrect(x0=z["start"], x1=z["start"] + z["length"], fillcolor=z_color, layer="below", line_width=0.5, line_dash="dot", line_color="rgba(120, 120, 120, 0.4)", annotation_text=f"{z['num']}.{z['name']}", annotation_position="top left", annotation=dict(font_size=9, font_color="#222222", textangle=-90))
-        fig2.update_layout(title=f"INDIVIDUALLY ALIGNED PROFILES ({f_variant}): {data1['filename']}", xaxis=dict(title="Individual Probe Distance (Meters from Probe's 60°C Entry)", range=[-1, total_furnace_length + 2]), yaxis_title="Temperature (°C)", hovermode="x unified", template="plotly_dark", height=550)
-        st.plotly_chart(fig2, use_container_width=True)
+        
+        # ADDED TOGGLE BUTTON TO SHOW/HIDE THE SECOND GRAPH
+        show_indiv_chart = st.toggle("👁️ Show / Hide Individually Aligned Probe Chart", value=True)
+        
+        if show_indiv_chart:
+            st.subheader("Individually Aligned Probe Chart (Own 60°C Entry)")
+            fig2 = go.Figure()
+            for col in probe_cols:
+                offset_m = data1["probe_start_info"][col]["Offset_Meters"]
+                indiv_hover = np.stack((df_m1["Time_HHMMSS"], df_m1["Time_Seconds"], np.full(len(df_m1), offset_m)), axis=-1)
+                fig2.add_trace(go.Scatter(x=df_m1[f"Distance_{col}"], y=df_m1[col], mode="lines", name=f"{col} (+{offset_m:.2f}m)" if offset_m > 0 else f"{col} (Lead)", customdata=indiv_hover, hovertemplate="%{fullData.name}: %{y:.1f} °C<br>Indiv Dist: %{x:.2f} m<br>Time: %{customdata[0]}", line=dict(color=PROBE_COLORS.get(col))))
+            for z in zones:
+                z_color = GROUP_COLORS.get(z["group"], "rgba(200, 200, 200, 0.2)")
+                fig2.add_vrect(x0=z["start"], x1=z["start"] + z["length"], fillcolor=z_color, layer="below", line_width=0.5, line_dash="dot", line_color="rgba(120, 120, 120, 0.4)", annotation_text=f"{z['num']}.{z['name']}", annotation_position="top left", annotation=dict(font_size=9, font_color="#222222", textangle=-90))
+            fig2.update_layout(title=f"INDIVIDUALLY ALIGNED PROFILES ({f_variant}): {data1['filename']}", xaxis=dict(title="Individual Probe Distance (Meters from Probe's 60°C Entry)", range=[-1, total_furnace_length + 2]), yaxis_title="Temperature (°C)", hovermode="x unified", template="plotly_dark", height=550)
+            st.plotly_chart(fig2, use_container_width=True)
 
     with tabs[1]:
         col_a, col_b = st.columns(2)
@@ -675,6 +681,5 @@ else:
                 for col in data2["probe_cols"]:
                     if col in df_m2.columns: fig_comp.add_trace(go.Scatter(x=df_m2["Distance_Meters"], y=df_m2[col], mode="lines", name=f"F2: {col}", line=dict(dash='dash', color=PROBE_COLORS.get(col), width=1.5)))
                 
-                # Limit X-Axis on comparison chart as well
                 fig_comp.update_layout(title=f"COMPARISON: {data1['filename']} vs {data2['filename']}", xaxis=dict(title="Distance (Meters)", range=[-1, total_furnace_length + 2]), yaxis_title="Temperature (°C)", hovermode="x unified", template="plotly_dark", height=600)
                 st.plotly_chart(fig_comp, use_container_width=True)
