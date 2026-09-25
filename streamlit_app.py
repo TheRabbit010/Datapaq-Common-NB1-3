@@ -251,7 +251,6 @@ def process_paq_file(file_bytes, filename):
     found_comments, found_recipes, found_probes = [], [], []
     for s in raw_texts:
         if re.search(r'\\\\|\b[A-Z]:\\', s) or re.search(r'\.(ovn|prd|pro|rec|paq|jpg|png|bmp)\b', s, re.IGNORECASE) or re.search(r'\\Users\\|Desktop', s, re.IGNORECASE): continue
-        # --- เพิ่มการจับ Braze Temp ลงใน Recipe ---
         is_recipe = re.search(r'\b(O2 Exit|ppm|CV speed|mm/min|N2 Flow|WJ Flow|Top Temp|Bot temp|SP1|SP2\s*==>|Braze Temp)\b', s, re.IGNORECASE)
         if is_recipe:
             s_rec = re.sub(r'\b(?:CProcessFile|COven|CZone|CRecipe|CProduct|CAnalysisParameters|CToleranceCurve)\b', '', s).strip()
@@ -309,7 +308,8 @@ def process_paq_file(file_bytes, filename):
     base_cfg = FURNACE_CONFIGS.get(furnace_id, FURNACE_CONFIGS["NB3"])
     cfg = dict(base_cfg)
 
-    if "RAD" in furnace_variant: cfg.update({"dryer_dwell_thresh_1": 150.0, "dryer_dwell_thresh_2": 175.0, "debinder_dwell_thresh": 200.0, "brazing_dwell_thresh_1": 550.0, "brazing_dwell_thresh_2": 583.0, "brazing_dwell_thresh_3": 591.0, "brazing_dwell_thresh_4": 600.0})
+    # --- อัพเดต Threshold ของ NB1 RAD ตามโจทย์ ---
+    if "RAD" in furnace_variant: cfg.update({"dryer_dwell_thresh_1": 150.0, "dryer_dwell_thresh_2": 175.0, "debinder_dwell_thresh": 200.0, "brazing_dwell_thresh_1": 550.0, "brazing_dwell_thresh_2": 577.0, "brazing_dwell_thresh_3": 583.0, "brazing_dwell_thresh_4": 600.0})
     elif "NB1" in furnace_variant: cfg.update({"dryer_dwell_thresh_1": 150.0, "dryer_dwell_thresh_2": 200.0, "debinder_dwell_thresh": 300.0, "brazing_dwell_thresh_1": 550.0, "brazing_dwell_thresh_2": 577.0, "brazing_dwell_thresh_3": 591.0, "brazing_dwell_thresh_4": 600.0})
     elif "NB2" in furnace_variant: cfg.update({"dryer_dwell_thresh_1": 200.0, "dryer_dwell_thresh_2": 250.0, "debinder_dwell_thresh": None, "brazing_dwell_thresh_1": 550.0, "brazing_dwell_thresh_2": 577.0, "brazing_dwell_thresh_3": 591.0, "brazing_dwell_thresh_4": 600.0})
     elif "BTM" in furnace_variant: cfg.update({"dryer_dwell_thresh_1": 250.0, "dryer_dwell_thresh_2": 300.0, "debinder_dwell_thresh": None, "brazing_dwell_thresh_1": 550.0, "brazing_dwell_thresh_2": 577.0, "brazing_dwell_thresh_3": 591.0, "brazing_dwell_thresh_4": 600.0})
@@ -432,11 +432,11 @@ else:
                 if bt is not None: r[f"Brazing Dwell (≥{int(bt)}°C)"] = format_dwell_time((brazing_df[col] >= bt).sum()) if not brazing_df.empty else "00:00:00"
             matrix_rows.append(r)
             
-        # --- ใช้ลำดับตายตัวสำหรับ NB1 (RAD) เพื่อให้ตรงกับภาพต้นฉบับ 100% ---
+        # --- ลำดับตายตัวสำหรับ NB1 (RAD) เพื่อให้ตรงกับภาพเป๊ะๆ ---
         if f_variant == "NB1 (RAD)":
             desired_order = ["PB#1", "PB#2", "PB#3", "PB#8", "PB#4", "PB#5", "PB#6", "PB#7"]
             matrix_rows = sorted(matrix_rows, key=lambda x: desired_order.index(x["Probe"]) if x["Probe"] in desired_order else 99)
-        # ----------------------------------------------------------------
+        # --------------------------------------------------------
 
         st.subheader(f"⏱️ Inspection Matrix — {f_variant}")
         std_info = STANDARD_SPECS.get(f_variant)
@@ -448,9 +448,59 @@ else:
             </div>
             """, unsafe_allow_html=True)
             
+        # --- กล่องคำอธิบายสี (Color Legend) ---
+        st.markdown("""
+        <div style="font-size: 0.95rem; margin-bottom: 10px; padding: 10px; border-radius: 5px; background-color: rgba(255,255,255,0.05);">
+            <b>Color Legend / คำอธิบายสี:</b>&nbsp;&nbsp;
+            <span style="color: #00e676; font-weight: bold;">■ Green (สีเขียว)</span>: Pass standard (ผ่านเกณฑ์) &nbsp;&nbsp;|&nbsp;&nbsp;
+            <span style="color: #ff4444; font-weight: bold;">■ Red (สีแดง)</span>: Fail standard (ไม่ผ่านเกณฑ์) &nbsp;&nbsp;|&nbsp;&nbsp;
+            <span style="color: #a0aab2; font-weight: bold;">■ Default (สีปกติ)</span>: Reference only (ค่าอ้างอิง)
+        </div>
+        """, unsafe_allow_html=True)
+
         df_matrix = pd.DataFrame(matrix_rows)
         format_dict = {col: "{:.1f}" for col in df_matrix.columns if "Max (°C)" in col}
         st.dataframe(df_matrix.style.apply(style_inspection_matrix, variant=f_variant, axis=1).format(format_dict, na_rep="N/A"), use_container_width=True, hide_index=True)
+        
+        # --- กล่องสรุปผลอัตโนมัติ (Automated Summary) ---
+        overall_pass = True
+        failed_points = []
+        val_rules = VALIDATION_RULES.get(f_variant, {})
+        
+        for r in matrix_rows:
+            probe = r["Probe"]
+            for k, v in r.items():
+                if k == "Probe": continue
+                rule = val_rules.get(k)
+                if not rule: continue
+                is_fail = False
+                if pd.isna(v) or v == "00:00:00" or v == "" or v == 0:
+                    if rule[0] > 0: is_fail = True
+                else:
+                    min_v, max_v = rule
+                    if "Max (°C)" in k:
+                        try:
+                            if not (min_v <= float(v) <= max_v): is_fail = True
+                        except: pass
+                    elif "Dwell" in k:
+                        try:
+                            parts = str(v).split(':')
+                            if len(parts) == 3:
+                                total_s = int(parts[0])*3600 + int(parts[1])*60 + int(parts[2])
+                                if not (min_v <= total_s <= max_v): is_fail = True
+                        except: pass
+                if is_fail:
+                    overall_pass = False
+                    failed_points.append(f"{probe} ({k})")
+
+        if std_info:
+            if overall_pass:
+                st.success("✅ **OVERALL STATUS: PASS | สถานะภาพรวม: ผ่านเกณฑ์มาตรฐาน**\n\nThe thermal profile meets all specified requirements for this product. (โปรไฟล์อุณหภูมิผ่านข้อกำหนดทั้งหมดสำหรับผลิตภัณฑ์นี้)")
+            else:
+                fail_str = ", ".join(list(dict.fromkeys(failed_points)))
+                st.error(f"❌ **OVERALL STATUS: FAIL | สถานะภาพรวม: ไม่ผ่านเกณฑ์มาตรฐาน**\n\nThe thermal profile does NOT meet the requirements. Please check the red values in the matrix. (โปรไฟล์อุณหภูมิไม่ผ่านข้อกำหนด กรุณาตรวจสอบค่าสีแดงในตาราง)\n\n**Failed Items (จุดที่ไม่ผ่าน):** {fail_str}")
+        # ----------------------------------------------
+
         st.markdown("---")
         
         col_a, col_b = st.columns(2)
@@ -466,13 +516,11 @@ else:
         with col_b:
             st.subheader("📍 Probe Locations")
             if data1["probe_locations"]:
-                # --- จัดเรียงโพรบโลเคชั่นให้ตรงกับตาราง Inspection Matrix ---
                 if f_variant == "NB1 (RAD)":
                     desired_order = ["PB#1", "PB#2", "PB#3", "PB#8", "PB#4", "PB#5", "PB#6", "PB#7"]
                     sorted_probes = sorted(data1["probe_locations"].items(), key=lambda x: desired_order.index(x[0]) if x[0] in desired_order else 99)
                 else:
                     sorted_probes = sorted(data1["probe_locations"].items(), key=lambda x: int(x[0].replace("PB#", "")) if x[0].replace("PB#", "").isdigit() else 99)
-                # --------------------------------------------------------
                 st.dataframe(pd.DataFrame([{"Channel": k, "Attached Location": v} for k, v in sorted_probes]), use_container_width=True, hide_index=True)
             else:
                 st.info("No explicit probe location mapping found in PAQ header.")
