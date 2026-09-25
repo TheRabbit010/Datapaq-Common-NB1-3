@@ -251,13 +251,15 @@ def process_paq_file(file_bytes, filename):
     found_comments, found_recipes, found_probes = [], [], []
     for s in raw_texts:
         if re.search(r'\\\\|\b[A-Z]:\\', s) or re.search(r'\.(ovn|prd|pro|rec|paq|jpg|png|bmp)\b', s, re.IGNORECASE) or re.search(r'\\Users\\|Desktop', s, re.IGNORECASE): continue
-        is_recipe = re.search(r'\b(O2 Exit|ppm|CV speed|mm/min|N2 Flow|WJ Flow|Top Temp|Bot temp|SP1|SP2\s*==>)\b', s, re.IGNORECASE)
+        # --- เพิ่มการจับ Braze Temp ลงใน Recipe ---
+        is_recipe = re.search(r'\b(O2 Exit|ppm|CV speed|mm/min|N2 Flow|WJ Flow|Top Temp|Bot temp|SP1|SP2\s*==>|Braze Temp)\b', s, re.IGNORECASE)
         if is_recipe:
             s_rec = re.sub(r'\b(?:CProcessFile|COven|CZone|CRecipe|CProduct|CAnalysisParameters|CToleranceCurve)\b', '', s).strip()
             s_rec = re.sub(r'^[>#;\.,\|]+', '', s_rec).strip()
             s_rec = re.sub(r'(WJ Flow)', r'\n\1', s_rec)
             s_rec = re.sub(r'(NB Top Temp)', r'\n\1', s_rec)
             s_rec = re.sub(r'(NB Bot temp)', r'\n\1', s_rec)
+            s_rec = re.sub(r'(Braze Temp)', r'\n\1', s_rec)
             if s_rec and s_rec not in found_recipes: found_recipes.append(s_rec)
             continue
         s_clean = clean_paq_text(s)
@@ -406,7 +408,6 @@ else:
         debinder_info = next((s for s in stages if s["Stage"] == "Debinder"), None) if has_debinder else None
         brazing_info = next((s for s in stages if s["Stage"] == "Brazing"), stages[-1])
 
-        # --- ส่วนที่ทำการประมวลผลช่วงเวลาแบบ Window Time ตามเงื่อนไข NB1 (RAD) ---
         if f_variant == "NB1 (RAD)":
             process_time = df_m1["Time_Seconds"] - data1["detected_start_sec"]
             dryer_df = df_m1[(process_time >= 0) & (process_time <= 300)]
@@ -414,7 +415,6 @@ else:
         else:
             dryer_df = df_m1[(df_m1["Distance_Meters"] >= dryer_info["Start (m)"]) & (df_m1["Distance_Meters"] <= dryer_info["End (m)"])]
             debinder_df = df_m1[(df_m1["Distance_Meters"] >= debinder_info["Start (m)"]) & (df_m1["Distance_Meters"] <= debinder_info["End (m)"])] if debinder_info else None
-        # ----------------------------------------------------------------------
         
         brazing_df = df_m1[(df_m1["Distance_Meters"] >= brazing_info["Start (m)"]) & (df_m1["Distance_Meters"] <= brazing_info["End (m)"])]
 
@@ -432,15 +432,11 @@ else:
                 if bt is not None: r[f"Brazing Dwell (≥{int(bt)}°C)"] = format_dwell_time((brazing_df[col] >= bt).sum()) if not brazing_df.empty else "00:00:00"
             matrix_rows.append(r)
             
-        def sort_matrix(x):
-            loc = data1["probe_locations"].get(x["Probe"], "").lower()
-            group = 0 if "top" in loc else (1 if "bottom" in loc or "bot" in loc else 2)
-            try: num = int(x["Probe"].replace("PB#", ""))
-            except: num = 99
-            return (group, num)
-        
+        # --- ใช้ลำดับตายตัวสำหรับ NB1 (RAD) เพื่อให้ตรงกับภาพต้นฉบับ 100% ---
         if f_variant == "NB1 (RAD)":
-            matrix_rows = sorted(matrix_rows, key=sort_matrix)
+            desired_order = ["PB#1", "PB#2", "PB#3", "PB#8", "PB#4", "PB#5", "PB#6", "PB#7"]
+            matrix_rows = sorted(matrix_rows, key=lambda x: desired_order.index(x["Probe"]) if x["Probe"] in desired_order else 99)
+        # ----------------------------------------------------------------
 
         st.subheader(f"⏱️ Inspection Matrix — {f_variant}")
         std_info = STANDARD_SPECS.get(f_variant)
@@ -470,7 +466,13 @@ else:
         with col_b:
             st.subheader("📍 Probe Locations")
             if data1["probe_locations"]:
-                sorted_probes = sorted(data1["probe_locations"].items(), key=lambda x: int(x[0].replace("PB#", "")) if x[0].replace("PB#", "").isdigit() else 0)
+                # --- จัดเรียงโพรบโลเคชั่นให้ตรงกับตาราง Inspection Matrix ---
+                if f_variant == "NB1 (RAD)":
+                    desired_order = ["PB#1", "PB#2", "PB#3", "PB#8", "PB#4", "PB#5", "PB#6", "PB#7"]
+                    sorted_probes = sorted(data1["probe_locations"].items(), key=lambda x: desired_order.index(x[0]) if x[0] in desired_order else 99)
+                else:
+                    sorted_probes = sorted(data1["probe_locations"].items(), key=lambda x: int(x[0].replace("PB#", "")) if x[0].replace("PB#", "").isdigit() else 99)
+                # --------------------------------------------------------
                 st.dataframe(pd.DataFrame([{"Channel": k, "Attached Location": v} for k, v in sorted_probes]), use_container_width=True, hide_index=True)
             else:
                 st.info("No explicit probe location mapping found in PAQ header.")
