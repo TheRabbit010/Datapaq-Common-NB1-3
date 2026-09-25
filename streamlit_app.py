@@ -53,7 +53,6 @@ def style_inspection_matrix(row, variant, check_dryer_max=False):
         val = row[col]
         rule = rules.get(col)
         
-        # --- เงื่อนไขสำหรับข้ามการเช็คสีแดงของ Dryer Max หากผู้ใช้ไม่ได้ติ๊กเลือก ---
         if not check_dryer_max and "Dryer Max" in col:
             rule = None
             
@@ -149,10 +148,7 @@ def clean_paq_text(raw_text):
 def parse_operator_and_metadata(comments_list):
     combined = " ".join(comments_list)
     op, site = "N/A", "N/A"
-    
-    # --- บังคับให้เป็นชื่อบริษัท VSTS ตามที่ระบุมา ---
     comp = "VSTS"
-    # ----------------------------------------
     
     m_site = re.search(r'(Power\s+Chonburi|Chonburi|Plant\s+\d+|Factory\s+\d+)', combined, re.IGNORECASE)
     if m_site: site = m_site.group(1).strip()
@@ -176,11 +172,19 @@ def parse_operator_and_metadata(comments_list):
     
     clean_notes = re.sub(r'NB\s+with\s+Debinder\s+NB\s+Furnace\s+Total\s*;\s*[\d,]+\s*mm', '', clean_notes, flags=re.IGNORECASE)
     clean_notes = re.sub(r'\b(Dryer Z|Air Cool|Exit|EXT Dryer|ENT DB|DB Z|RAD|SU2|12XHP|68T|G100|CV2-2-2|NB1|12XHP68Tube)\b', '', clean_notes, flags=re.IGNORECASE)
-    garbage_regex = r'(C:\\Program Files|IJ@1|a@FGr|YW@\.|dhmquz|QUZ|rx\s+knv|V\^e|ipyw~|MSYmqw~|AFMEKO|FIL257|CVersionInfo|1w-!|zfo@|8gDi|R@\?m|MQTDFI|HKN\*,|CAlarmParametersDouble|CMaximumMinimumAnalysisParameters)'
+    
+    # --- ปรับปรุงระบบกรองขยะ (Garbage Regex) ให้ตัดคำเฉพาะเมื่อเจอสัญลักษณ์มั่วๆ ---
+    garbage_start = re.search(r'([A-Za-z]\\[A-Za-z]|[\$\#\^\~]{2,}|\?[A-Z]{2,}|[a-z]{2,}\~|\bKO\\|\b\d{1,2}:\d{1,2}[A-Z]+)', clean_notes)
+    if garbage_start:
+        clean_notes = clean_notes[:garbage_start.start()]
+        
+    garbage_regex = r'(C:\\Program Files|IJ@1|a@FGr|YW@\.|dhmquz|QUZ|rx\s+knv|V\^e|ipyw~|MSYmqw~|AFMEKO|FIL257|CVersionInfo|1w-!|zfo@|8gDi|R@\?m|MQTDFI|HKN\*,)'
     clean_notes = re.split(garbage_regex, clean_notes, flags=re.IGNORECASE)[0]
+    
     clean_notes = re.sub(r'\s{2,}', ' ', clean_notes)
     clean_notes = re.sub(r'^[.,;\s]+', '', clean_notes)
     clean_notes = re.sub(r'[\.,\s]+$', '.', clean_notes).strip()
+    # -------------------------------------------------------------------------
     
     return op, comp, site, clean_notes if clean_notes else "N/A"
 
@@ -257,19 +261,20 @@ def process_paq_file(file_bytes, filename):
 
     found_comments, found_recipes, found_probes = [], [], []
     for s in raw_texts:
-        # --- ดักจับ Recipe ก่อนถูกคำสั่ง skip หากมี \ ปะปนมา ---
+        # --- ดักจับ Recipe ก่อนเพื่อป้องกันการถูกข้ามเมื่อมีตัวหนังสือ Path ซ่อนอยู่ ---
         is_recipe = re.search(r'\b(O2 Exit|ppm|CV speed|mm/min|N2 Flow|WJ Flow|Top Temp|Bot temp|SP1|SP2\s*==>|Braze Temp)\b', s, re.IGNORECASE)
         if is_recipe:
-            s_rec = re.sub(r'\b(?:CProcessFile|COven|CZone|CRecipe|CProduct|CAnalysisParameters|CToleranceCurve|CAlarmParametersDouble|CMaximumMinimumAnalysisParameters|CTimeAtMeasurementAnalysisParameters|CRiseFallAnalysisParameters|CSlopeAnalysisParameters|CPeakDifferenceAnalysisParameters|CAreaUnderCurveAnalysisParameters|CFurnaceSurveyAnalysisParameters)\b', '', s).strip()
-            s_rec = re.sub(r'[A-Za-z]:\\[^\s]+', '', s_rec) # ลบ path ไฟล์ที่อาจติดมาเช่น C:\Program Files
+            s_rec = re.split(r'\b[A-Za-z]:\\', s)[0] # ตัดทิ้งตั้งแต่เริ่มเจอ Path เช่น C:\Program Files
+            s_rec = re.split(r'\bdouble m\b', s_rec, flags=re.IGNORECASE)[0]
+            s_rec = re.sub(r'\b(?:CProcessFile|COven|CZone|CRecipe|CProduct|CAnalysisParameters|CToleranceCurve|CAlarmParametersDouble|CMaximumMinimumAnalysisParameters|CTimeAtMeasurementAnalysisParameters|CRiseFallAnalysisParameters|CSlopeAnalysisParameters|CPeakDifferenceAnalysisParameters|CAreaUnderCurveAnalysisParameters|CFurnaceSurveyAnalysisParameters)\b', '', s_rec).strip()
             s_rec = re.sub(r'^[>#;\.,\|]+', '', s_rec).strip()
-            s_rec = re.sub(r'\bdouble m\b', '', s_rec).strip() # ลบคำขยะข้างๆ
             s_rec = re.sub(r'(WJ Flow)', r'\n\1', s_rec)
             s_rec = re.sub(r'(NB Top Temp)', r'\n\1', s_rec)
             s_rec = re.sub(r'(NB Bot temp)', r'\n\1', s_rec)
             s_rec = re.sub(r'(Braze Temp)', r'\n\1', s_rec)
             if s_rec and s_rec not in found_recipes: found_recipes.append(s_rec)
             continue
+        # -------------------------------------------------------------------
         
         if re.search(r'\\\\|\b[A-Z]:\\', s) or re.search(r'\.(ovn|prd|pro|rec|paq|jpg|png|bmp)\b', s, re.IGNORECASE) or re.search(r'\\Users\\|Desktop', s, re.IGNORECASE): continue
         s_clean = clean_paq_text(s)
@@ -446,7 +451,6 @@ else:
             desired_order = ["PB#1", "PB#2", "PB#3", "PB#8", "PB#4", "PB#5", "PB#6", "PB#7"]
             matrix_rows = sorted(matrix_rows, key=lambda x: desired_order.index(x["Probe"]) if x["Probe"] in desired_order else 99)
 
-        # --- เพิ่ม Checkbox สั่งเปิด-ปิด การตรวจสอบผลของ Dryer Max ---
         st.subheader(f"⏱️ Inspection Matrix — {f_variant}")
         check_dryer_max = st.checkbox("🔍 ตรวจสอบเกณฑ์ Dryer Max Temp (°C) / Evaluate Dryer Max", value=False)
         
@@ -472,7 +476,6 @@ else:
         format_dict = {col: "{:.1f}" for col in df_matrix.columns if "Max (°C)" in col}
         st.dataframe(df_matrix.style.apply(style_inspection_matrix, variant=f_variant, check_dryer_max=check_dryer_max, axis=1).format(format_dict, na_rep="N/A"), use_container_width=True, hide_index=True)
         
-        # --- สร้างกล่องสรุปสถานะการประมวลผล (Overall Status) ---
         overall_pass = True
         failed_points = []
         val_rules = VALIDATION_RULES.get(f_variant, {})
@@ -481,7 +484,7 @@ else:
             probe = r["Probe"]
             for k, v in r.items():
                 if k == "Probe": continue
-                if not check_dryer_max and "Dryer Max" in k: continue # ข้ามถ้าไม่ให้เช็ค
+                if not check_dryer_max and "Dryer Max" in k: continue 
                 
                 rule = val_rules.get(k)
                 if not rule: continue
@@ -511,7 +514,6 @@ else:
             else:
                 fail_str = ", ".join(list(dict.fromkeys(failed_points)))
                 st.error(f"❌ **OVERALL STATUS: FAIL | สถานะภาพรวม: ไม่ผ่านเกณฑ์มาตรฐาน**\n\nThe thermal profile does NOT meet the requirements. Please check the red values in the matrix. (โปรไฟล์อุณหภูมิไม่ผ่านข้อกำหนด กรุณาตรวจสอบค่าสีแดงในตาราง)\n\n**Failed Items (จุดที่ไม่ผ่าน):** {fail_str}")
-        # -------------------------------------------------------------------
 
         st.markdown("---")
         
