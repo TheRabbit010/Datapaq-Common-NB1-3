@@ -45,13 +45,18 @@ VALIDATION_RULES = {
     "NB3 (BTM)": {"Dryer Max (°C)": (300, 375), "Brazing Max (°C)": (595, 608), "Dryer Dwell (≥300°C)": (120, 99999), "Brazing Dwell (≥577°C)": (240, 840), "Brazing Dwell (≥591°C)": (120, 720), "Brazing Dwell (≥600°C)": (0, 480)}
 }
 
-def style_inspection_matrix(row, variant):
+def style_inspection_matrix(row, variant, check_dryer_max=False):
     styles = [''] * len(row)
     rules = VALIDATION_RULES.get(variant, {})
     for i, col in enumerate(row.index):
         if col == "Probe": continue
         val = row[col]
         rule = rules.get(col)
+        
+        # --- เงื่อนไขสำหรับข้ามการเช็คสีแดงของ Dryer Max หากผู้ใช้ไม่ได้ติ๊กเลือก ---
+        if not check_dryer_max and "Dryer Max" in col:
+            rule = None
+            
         is_fail = False
         if pd.isna(val) or val == "00:00:00" or val == "" or val == 0:
             if rule and rule[0] > 0: is_fail = True
@@ -143,12 +148,14 @@ def clean_paq_text(raw_text):
 
 def parse_operator_and_metadata(comments_list):
     combined = " ".join(comments_list)
-    op, comp, site = "N/A", "N/A", "N/A"
+    op, site = "N/A", "N/A"
+    
+    # --- บังคับให้เป็นชื่อบริษัท VSTS ตามที่ระบุมา ---
+    comp = "VSTS"
+    # ----------------------------------------
     
     m_site = re.search(r'(Power\s+Chonburi|Chonburi|Plant\s+\d+|Factory\s+\d+)', combined, re.IGNORECASE)
     if m_site: site = m_site.group(1).strip()
-    m_comp = re.search(r'\b(VSTS|Datapaq)\b', combined, re.IGNORECASE)
-    if m_comp: comp = m_comp.group(1).strip()
     
     combined_clean_start = re.sub(r'^\s*CAlarm\s*', '', combined, flags=re.IGNORECASE)
     m_op = re.search(r'^([A-Za-z/]+)\s+(?:Monthly|WK|date|product|validation|run|test)', combined_clean_start, re.IGNORECASE)
@@ -159,7 +166,7 @@ def parse_operator_and_metadata(comments_list):
     chopped_comment = re.split(r'\b(Untitled|Entry Zone|VSTS Exit Dryer|Exit Dryer|0Hl|!@f|"onB|aaa\.\.\.|FFGCC|bbbRRR|LNNSQ|OD@)\b', combined_clean_start, flags=re.IGNORECASE)[0]
     clean_notes = chopped_comment
     
-    for token in [op, comp, site, "CAlarm"]:
+    for token in [op, "Datapaq", "VSTS", site, "CAlarm"]:
         if token != "N/A":
             clean_notes = re.sub(rf'^\s*{re.escape(token)}\b\s*', '', clean_notes, flags=re.IGNORECASE)
             clean_notes = re.sub(rf'\s+\b{re.escape(token)}\b\s+', ' ', clean_notes, flags=re.IGNORECASE)
@@ -250,17 +257,21 @@ def process_paq_file(file_bytes, filename):
 
     found_comments, found_recipes, found_probes = [], [], []
     for s in raw_texts:
-        if re.search(r'\\\\|\b[A-Z]:\\', s) or re.search(r'\.(ovn|prd|pro|rec|paq|jpg|png|bmp)\b', s, re.IGNORECASE) or re.search(r'\\Users\\|Desktop', s, re.IGNORECASE): continue
+        # --- ดักจับ Recipe ก่อนถูกคำสั่ง skip หากมี \ ปะปนมา ---
         is_recipe = re.search(r'\b(O2 Exit|ppm|CV speed|mm/min|N2 Flow|WJ Flow|Top Temp|Bot temp|SP1|SP2\s*==>|Braze Temp)\b', s, re.IGNORECASE)
         if is_recipe:
-            s_rec = re.sub(r'\b(?:CProcessFile|COven|CZone|CRecipe|CProduct|CAnalysisParameters|CToleranceCurve)\b', '', s).strip()
+            s_rec = re.sub(r'\b(?:CProcessFile|COven|CZone|CRecipe|CProduct|CAnalysisParameters|CToleranceCurve|CAlarmParametersDouble|CMaximumMinimumAnalysisParameters|CTimeAtMeasurementAnalysisParameters|CRiseFallAnalysisParameters|CSlopeAnalysisParameters|CPeakDifferenceAnalysisParameters|CAreaUnderCurveAnalysisParameters|CFurnaceSurveyAnalysisParameters)\b', '', s).strip()
+            s_rec = re.sub(r'[A-Za-z]:\\[^\s]+', '', s_rec) # ลบ path ไฟล์ที่อาจติดมาเช่น C:\Program Files
             s_rec = re.sub(r'^[>#;\.,\|]+', '', s_rec).strip()
+            s_rec = re.sub(r'\bdouble m\b', '', s_rec).strip() # ลบคำขยะข้างๆ
             s_rec = re.sub(r'(WJ Flow)', r'\n\1', s_rec)
             s_rec = re.sub(r'(NB Top Temp)', r'\n\1', s_rec)
             s_rec = re.sub(r'(NB Bot temp)', r'\n\1', s_rec)
             s_rec = re.sub(r'(Braze Temp)', r'\n\1', s_rec)
             if s_rec and s_rec not in found_recipes: found_recipes.append(s_rec)
             continue
+        
+        if re.search(r'\\\\|\b[A-Z]:\\', s) or re.search(r'\.(ovn|prd|pro|rec|paq|jpg|png|bmp)\b', s, re.IGNORECASE) or re.search(r'\\Users\\|Desktop', s, re.IGNORECASE): continue
         s_clean = clean_paq_text(s)
         if not s_clean: continue
         is_probe = re.search(r'\b(cooler|drill&insert|inside H/D|manifold|core)\b', s_clean, re.IGNORECASE)
@@ -308,7 +319,6 @@ def process_paq_file(file_bytes, filename):
     base_cfg = FURNACE_CONFIGS.get(furnace_id, FURNACE_CONFIGS["NB3"])
     cfg = dict(base_cfg)
 
-    # --- อัพเดต Threshold ของ NB1 RAD ตามโจทย์ ---
     if "RAD" in furnace_variant: cfg.update({"dryer_dwell_thresh_1": 150.0, "dryer_dwell_thresh_2": 175.0, "debinder_dwell_thresh": 200.0, "brazing_dwell_thresh_1": 550.0, "brazing_dwell_thresh_2": 577.0, "brazing_dwell_thresh_3": 583.0, "brazing_dwell_thresh_4": 600.0})
     elif "NB1" in furnace_variant: cfg.update({"dryer_dwell_thresh_1": 150.0, "dryer_dwell_thresh_2": 200.0, "debinder_dwell_thresh": 300.0, "brazing_dwell_thresh_1": 550.0, "brazing_dwell_thresh_2": 577.0, "brazing_dwell_thresh_3": 591.0, "brazing_dwell_thresh_4": 600.0})
     elif "NB2" in furnace_variant: cfg.update({"dryer_dwell_thresh_1": 200.0, "dryer_dwell_thresh_2": 250.0, "debinder_dwell_thresh": None, "brazing_dwell_thresh_1": 550.0, "brazing_dwell_thresh_2": 577.0, "brazing_dwell_thresh_3": 591.0, "brazing_dwell_thresh_4": 600.0})
@@ -432,13 +442,14 @@ else:
                 if bt is not None: r[f"Brazing Dwell (≥{int(bt)}°C)"] = format_dwell_time((brazing_df[col] >= bt).sum()) if not brazing_df.empty else "00:00:00"
             matrix_rows.append(r)
             
-        # --- ลำดับตายตัวสำหรับ NB1 (RAD) เพื่อให้ตรงกับภาพเป๊ะๆ ---
         if f_variant == "NB1 (RAD)":
             desired_order = ["PB#1", "PB#2", "PB#3", "PB#8", "PB#4", "PB#5", "PB#6", "PB#7"]
             matrix_rows = sorted(matrix_rows, key=lambda x: desired_order.index(x["Probe"]) if x["Probe"] in desired_order else 99)
-        # --------------------------------------------------------
 
+        # --- เพิ่ม Checkbox สั่งเปิด-ปิด การตรวจสอบผลของ Dryer Max ---
         st.subheader(f"⏱️ Inspection Matrix — {f_variant}")
+        check_dryer_max = st.checkbox("🔍 ตรวจสอบเกณฑ์ Dryer Max Temp (°C) / Evaluate Dryer Max", value=False)
+        
         std_info = STANDARD_SPECS.get(f_variant)
         if std_info:
             st.markdown(f"""
@@ -448,21 +459,20 @@ else:
             </div>
             """, unsafe_allow_html=True)
             
-        # --- กล่องคำอธิบายสี (Color Legend) ---
         st.markdown("""
         <div style="font-size: 0.95rem; margin-bottom: 10px; padding: 10px; border-radius: 5px; background-color: rgba(255,255,255,0.05);">
             <b>Color Legend / คำอธิบายสี:</b>&nbsp;&nbsp;
             <span style="color: #00e676; font-weight: bold;">■ Green (สีเขียว)</span>: Pass standard (ผ่านเกณฑ์) &nbsp;&nbsp;|&nbsp;&nbsp;
             <span style="color: #ff4444; font-weight: bold;">■ Red (สีแดง)</span>: Fail standard (ไม่ผ่านเกณฑ์) &nbsp;&nbsp;|&nbsp;&nbsp;
-            <span style="color: #a0aab2; font-weight: bold;">■ Default (สีปกติ)</span>: Reference only (ค่าอ้างอิง)
+            <span style="color: #a0aab2; font-weight: bold;">■ Default (สีปกติ)</span>: Reference only (ใช้เพื่ออ้างอิง)
         </div>
         """, unsafe_allow_html=True)
 
         df_matrix = pd.DataFrame(matrix_rows)
         format_dict = {col: "{:.1f}" for col in df_matrix.columns if "Max (°C)" in col}
-        st.dataframe(df_matrix.style.apply(style_inspection_matrix, variant=f_variant, axis=1).format(format_dict, na_rep="N/A"), use_container_width=True, hide_index=True)
+        st.dataframe(df_matrix.style.apply(style_inspection_matrix, variant=f_variant, check_dryer_max=check_dryer_max, axis=1).format(format_dict, na_rep="N/A"), use_container_width=True, hide_index=True)
         
-        # --- กล่องสรุปผลอัตโนมัติ (Automated Summary) ---
+        # --- สร้างกล่องสรุปสถานะการประมวลผล (Overall Status) ---
         overall_pass = True
         failed_points = []
         val_rules = VALIDATION_RULES.get(f_variant, {})
@@ -471,6 +481,8 @@ else:
             probe = r["Probe"]
             for k, v in r.items():
                 if k == "Probe": continue
+                if not check_dryer_max and "Dryer Max" in k: continue # ข้ามถ้าไม่ให้เช็ค
+                
                 rule = val_rules.get(k)
                 if not rule: continue
                 is_fail = False
@@ -499,7 +511,7 @@ else:
             else:
                 fail_str = ", ".join(list(dict.fromkeys(failed_points)))
                 st.error(f"❌ **OVERALL STATUS: FAIL | สถานะภาพรวม: ไม่ผ่านเกณฑ์มาตรฐาน**\n\nThe thermal profile does NOT meet the requirements. Please check the red values in the matrix. (โปรไฟล์อุณหภูมิไม่ผ่านข้อกำหนด กรุณาตรวจสอบค่าสีแดงในตาราง)\n\n**Failed Items (จุดที่ไม่ผ่าน):** {fail_str}")
-        # ----------------------------------------------
+        # -------------------------------------------------------------------
 
         st.markdown("---")
         
