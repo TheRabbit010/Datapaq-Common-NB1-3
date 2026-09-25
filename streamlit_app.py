@@ -96,7 +96,6 @@ STANDARD_SPECS = {
     }
 }
 
-# Raw numeric bounds (Min, Max) for pandas styling evaluation
 VALIDATION_RULES = {
     "NB1 (RAD)": {
         "Dryer Max (°C)": (175, 260), "Debinder Max (°C)": (200, 375), "Brazing Max (°C)": (583, 607),
@@ -497,17 +496,22 @@ def process_paq_file(file_bytes, filename):
     furnace_id = "NB3"
     furnace_variant = "NB3"
 
-    if re.search(r'\b(KE8|M2|EVO|BTM)\b', recipe_corpus, re.IGNORECASE):
+    # ==============================================================================
+    # ตรวจสอบและให้ความสำคัญกับคำว่า RAD เป็นอันดับแรกตามที่ผู้ใช้ต้องการ
+    # ==============================================================================
+    if re.search(r'\bRAD\b', recipe_corpus, re.IGNORECASE):
+        furnace_id = "NB1"
+        furnace_variant = "NB1 (RAD)"
+    elif re.search(r'\b(KE8|M2|EVO|BTM)\b', recipe_corpus, re.IGNORECASE):
         furnace_id = "NB3"
         if re.search(r'\bBTM\b', recipe_corpus, re.IGNORECASE): furnace_variant = "NB3 (BTM)"
         else: furnace_variant = "NB3 (KE8/M2/EVO)"
     elif re.search(r'\b(Tahc|Utahc)\b', recipe_corpus, re.IGNORECASE):
         furnace_id = "NB2"
         furnace_variant = "NB2 (Tahc/Utahc)"
-    elif re.search(r'\b(RAD|CDS|KN9|12SHP)\b', recipe_corpus, re.IGNORECASE):
+    elif re.search(r'\b(CDS|KN9|12SHP)\b', recipe_corpus, re.IGNORECASE):
         furnace_id = "NB1"
-        if re.search(r'\bRAD\b', recipe_corpus, re.IGNORECASE): furnace_variant = "NB1 (RAD)"
-        else: furnace_variant = "NB1 (CDS/KN9/12SHP)"
+        furnace_variant = "NB1 (CDS/KN9/12SHP)"
     elif (re.search(r'\bWK\d{1,2}\b', recipe_corpus, re.IGNORECASE) or re.search(r'\b\d{6}\b', recipe_corpus)):
         furnace_id = "NB1"
         furnace_variant = "NB1 (Standard)"
