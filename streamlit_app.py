@@ -167,18 +167,24 @@ def parse_operator_and_metadata(comments_list):
     split_match = re.search(r'(.*?)(?:\s+)?\b([A-Za-z]?Middle\s+left|[A-Za-z]?Middle\s+right|[A-Za-z]?Left\s+core|[A-Za-z]?Right\s+core|Bottom cooler|Top cooler)\b', clean_notes, flags=re.IGNORECASE)
     if split_match: clean_notes = split_match.group(1).strip()
     
-    # --- เริ่มส่วนการแก้ไขทำความสะอาด Comment Box ---
+    # --- เริ่มส่วนการแก้ไขทำความสะอาด Comment Box ให้หมดจด ---
     clean_notes = re.sub(r'NB\s+with\s+Debinder\s+NB\s+Furnace\s+Total\s*;\s*[\d,]+\s*mm', '', clean_notes, flags=re.IGNORECASE)
     clean_notes = re.sub(r'\b(Dryer Z|Air Cool|Exit|EXT Dryer|ENT DB|DB Z|RAD|SU2|12XHP|68T|G100|CV2-2-2|NB1|12XHP68Tube)\b', '', clean_notes, flags=re.IGNORECASE)
-    clean_notes = re.split(r'(YW@\.|dhmquz|QUZ|rx\s+knv|V\^e|ipyw~)', clean_notes)[0]
+    
+    # ตัดเมื่อเจอข้อความแปลกๆ หรือ Error Log ที่ฝังมาในไฟล์ PAQ
+    garbage_regex = r'(C:\\Program Files|IJ@1|a@FGr|YW@\.|dhmquz|QUZ|rx\s+knv|V\^e|ipyw~|MSYmqw~|AFMEKO|FIL257|CVersionInfo|1w-!|zfo@|8gDi|R@\?m|MQTDFI|HKN\*,|CAlarmParametersDouble|CMaximumMinimumAnalysisParameters)'
+    clean_notes = re.split(garbage_regex, clean_notes, flags=re.IGNORECASE)[0]
+    
     clean_notes = re.sub(r'\s{2,}', ' ', clean_notes)
     clean_notes = re.sub(r'^[.,;\s]+', '', clean_notes)
-    # -----------------------------------------------
+    # --------------------------------------------------------
 
     clean_notes = re.sub(r'[\.,\s]+$', '.', clean_notes).strip()
     return op, comp, site, clean_notes if clean_notes else "N/A"
 
 def clean_probe_location(loc_desc):
+    # กำจัดตัวเลขติดลบ หรือ 0, 1, 4 ข้างหน้าคำว่า Top/Bottom เช่น "4Bottom", "-Top", "0Bottom"
+    loc_desc = re.sub(r'^[^A-Za-z]*(Top|Bottom|Middle|Left|Right|Core)', r'\1', loc_desc, flags=re.IGNORECASE)
     return re.sub(r'\b[A-Z](Left|Right|Middle|Bottom|Top)\b', r'\1', loc_desc, flags=re.IGNORECASE)
 
 @st.cache_data
@@ -424,11 +430,18 @@ else:
                 if bt is not None: r[f"Brazing Dwell (≥{int(bt)}°C)"] = format_dwell_time((brazing_df[col] >= bt).sum()) if not brazing_df.empty else "00:00:00"
             matrix_rows.append(r)
             
-        # --- เพิ่มเงื่อนไขเรียงลำดับ PB สำหรับเตา NB1 (RAD) ให้ตรงกับรูป ---
+        # --- เริ่มส่วนการแก้ไขเรียงลำดับ Inspection Matrix สำหรับ RAD ---
+        # ฟังก์ชันจัดกลุ่มโดยวิเคราะห์จาก Location Text (Top นำหน้า และตามด้วย Bottom)
+        def sort_matrix(x):
+            loc = data1["probe_locations"].get(x["Probe"], "").lower()
+            group = 0 if "top" in loc else (1 if "bottom" in loc or "bot" in loc else 2)
+            try: num = int(x["Probe"].replace("PB#", ""))
+            except: num = 99
+            return (group, num)
+        
         if f_variant == "NB1 (RAD)":
-            desired_order = ["PB#1", "PB#2", "PB#3", "PB#8", "PB#4", "PB#5", "PB#6", "PB#7"]
-            matrix_rows = sorted(matrix_rows, key=lambda x: desired_order.index(x["Probe"]) if x["Probe"] in desired_order else 99)
-        # -----------------------------------------------------------------
+            matrix_rows = sorted(matrix_rows, key=sort_matrix)
+        # -----------------------------------------------------------
 
         st.subheader(f"⏱️ Inspection Matrix — {f_variant}")
         std_info = STANDARD_SPECS.get(f_variant)
