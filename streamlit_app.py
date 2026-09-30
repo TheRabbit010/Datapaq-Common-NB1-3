@@ -32,7 +32,7 @@ GROUP_COLORS = {"Dryer": "rgba(255, 235, 156, 0.15)", "Debinder": "rgba(255, 199
 STANDARD_SPECS = {
     "NB1 (RAD)": {"id": "PRCNVR02044", "max": "Dryer: 175-260°C &nbsp;|&nbsp; Debinder: 200-375°C &nbsp;|&nbsp; Brazing: 583-607°C", "dwell": "Dryer ≥175°C ≥ 1.00 min &nbsp;|&nbsp; Debinder ≥200°C ≥ 2.00 min &nbsp;|&nbsp; Brazing ≥577°C = 2.30 - 7.00 min, ≥583°C ≥ 2.30 min"},
     "NB1 (CDS/KN9/12SHP)": {"id": "PRCNVR02004", "max": "Dryer: 200-350°C &nbsp;|&nbsp; Debinder: 300-375°C &nbsp;|&nbsp; Brazing: 585-607°C", "dwell": "Dryer ≥200°C ≥ 1.30 min &nbsp;|&nbsp; Debinder ≥300°C ≥ 2.30 min &nbsp;|&nbsp; Brazing ≥577°C = 4.00 - 7.45 min"},
-    "NB3 (KE8/M2/EVO)": {"id": "PRCNVR02059", "max": "Dryer: 200-375°C &nbsp;|&nbsp; Brazing: 598-606°C", "dwell": "Dryer ≥200°C ≥ 1.30 min &nbsp;|&nbsp; Brazing ≥550°C = 7.00 - 10.30 min, ≥577°C = 4.30 - 7.00 min, ≥591°C = 1.30 - 4.00 min"},
+    "NB3 (KE8/M2/EVO)": {"id": "PRCNVR02059 (Evaporator M2)", "max": "Dryer: 200-375°C &nbsp;|&nbsp; Brazing: 595-606°C", "dwell": "Dryer ≥200°C ≥ 1.30 min &nbsp;|&nbsp; Brazing ≥550°C = 7.00 - 10.30 min, ≥577°C = 4.30 - 7.00 min, ≥591°C = 1.30 - 4.00 min"},
     "NB2 (Tahc/Utahc)": {"id": "PRCNVR02050", "max": "Dryer: 200-375°C &nbsp;|&nbsp; Brazing: 596-604°C", "dwell": "Dryer ≥250°C ≥ 1.00 min &nbsp;|&nbsp; Brazing ≥577°C = 4.00 - 7.00 min, ≥591°C = 1.30 - 4.30 min"},
     "NB3 (BTM)": {"id": "PRCNVR02033", "max": "Dryer: 300-375°C &nbsp;|&nbsp; Brazing: 595-608°C", "dwell": "Dryer ≥300°C ≥ 2.00 min &nbsp;|&nbsp; Brazing ≥577°C = 4.00 - 14.00 min, ≥591°C = 2.00 - 12.00 min, ≥600°C ≤ 8.00 min"}
 }
@@ -40,7 +40,7 @@ STANDARD_SPECS = {
 VALIDATION_RULES = {
     "NB1 (RAD)": {"Dryer Max (°C)": (175, 260), "Debinder Max (°C)": (200, 375), "Brazing Max (°C)": (583, 607), "Dryer Dwell (≥175°C)": (60, 99999), "Debinder Dwell (≥200°C)": (120, 99999), "Brazing Dwell (≥577°C)": (150, 420), "Brazing Dwell (≥583°C)": (150, 99999)},
     "NB1 (CDS/KN9/12SHP)": {"Dryer Max (°C)": (200, 350), "Debinder Max (°C)": (300, 375), "Brazing Max (°C)": (585, 607), "Dryer Dwell (≥200°C)": (90, 99999), "Debinder Dwell (≥300°C)": (150, 99999), "Brazing Dwell (≥577°C)": (240, 465)},
-    "NB3 (KE8/M2/EVO)": {"Dryer Max (°C)": (200, 375), "Brazing Max (°C)": (598, 606), "Dryer Dwell (≥200°C)": (90, 99999), "Brazing Dwell (≥550°C)": (420, 630), "Brazing Dwell (≥577°C)": (270, 420), "Brazing Dwell (≥591°C)": (90, 240)},
+    "NB3 (KE8/M2/EVO)": {"Dryer Max (°C)": (200, 375), "Brazing Max (°C)": (595, 606), "Dryer Dwell (≥200°C)": (90, 99999), "Brazing Dwell (≥550°C)": (420, 630), "Brazing Dwell (≥577°C)": (270, 420), "Brazing Dwell (≥591°C)": (90, 240)},
     "NB2 (Tahc/Utahc)": {"Dryer Max (°C)": (200, 375), "Brazing Max (°C)": (596, 604), "Dryer Dwell (≥250°C)": (60, 99999), "Brazing Dwell (≥577°C)": (240, 420), "Brazing Dwell (≥591°C)": (90, 270)},
     "NB3 (BTM)": {"Dryer Max (°C)": (300, 375), "Brazing Max (°C)": (595, 608), "Dryer Dwell (≥300°C)": (120, 99999), "Brazing Dwell (≥577°C)": (240, 840), "Brazing Dwell (≥591°C)": (120, 720), "Brazing Dwell (≥600°C)": (0, 480)}
 }
@@ -154,13 +154,19 @@ def parse_operator_and_metadata(comments_list):
     if m_site: site = m_site.group(1).strip()
     
     combined_clean_start = re.sub(r'^\s*CAlarm\s*', '', combined, flags=re.IGNORECASE)
-    m_op = re.search(r'^([A-Za-z/]+)\s+(?:Monthly|WK|date|product|validation|run|test)', combined_clean_start, re.IGNORECASE)
+    
+    # --- FIX REQ 2: Add DBLog to Operator Name extraction ---
+    m_op = re.search(r'^([A-Za-z/]+)\s+(?:Monthly|WK|date|product|validation|run|test|DBLog)', combined_clean_start, re.IGNORECASE)
     if m_op: op = m_op.group(1).strip()
     elif "Niwat" in combined_clean_start: op = "Niwat"
     elif "Sunisa" in combined_clean_start: op = "Sunisa"
 
     chopped_comment = re.split(r'\b(Untitled|Entry Zone|VSTS Exit Dryer|Exit Dryer|0Hl|!@f|"onB|aaa\.\.\.|FFGCC|bbbRRR|LNNSQ|OD@)\b', combined_clean_start, flags=re.IGNORECASE)[0]
     clean_notes = chopped_comment
+    
+    # --- FIX REQ 3: Remove Garbage Datapaq Logger Text ---
+    clean_notes = re.sub(r'DBLog\s+Cleared.*?VBUS\b', '', clean_notes, flags=re.IGNORECASE | re.DOTALL)
+    clean_notes = re.sub(r'DP2300\s+EFM32.*?(?:VBUS\b|\Z)', '', clean_notes, flags=re.IGNORECASE | re.DOTALL)
     
     for token in [op, "Datapaq", "VSTS", site, "CAlarm"]:
         if token != "N/A":
@@ -173,7 +179,6 @@ def parse_operator_and_metadata(comments_list):
     clean_notes = re.sub(r'NB\s+with\s+Debinder\s+NB\s+Furnace\s+Total\s*;\s*[\d,]+\s*mm', '', clean_notes, flags=re.IGNORECASE)
     clean_notes = re.sub(r'\b(Dryer Z|Air Cool|Exit|EXT Dryer|ENT DB|DB Z|RAD|SU2|12XHP|68T|G100|CV2-2-2|NB1|12XHP68Tube)\b', '', clean_notes, flags=re.IGNORECASE)
     
-    # --- ปรับปรุงระบบกรองขยะ (Garbage Regex) ให้ตัดคำเฉพาะเมื่อเจอสัญลักษณ์มั่วๆ ---
     garbage_start = re.search(r'([A-Za-z]\\[A-Za-z]|[\$\#\^\~]{2,}|\?[A-Z]{2,}|[a-z]{2,}\~|\bKO\\|\b\d{1,2}:\d{1,2}[A-Z]+)', clean_notes)
     if garbage_start:
         clean_notes = clean_notes[:garbage_start.start()]
@@ -184,7 +189,6 @@ def parse_operator_and_metadata(comments_list):
     clean_notes = re.sub(r'\s{2,}', ' ', clean_notes)
     clean_notes = re.sub(r'^[.,;\s]+', '', clean_notes)
     clean_notes = re.sub(r'[\.,\s]+$', '.', clean_notes).strip()
-    # -------------------------------------------------------------------------
     
     return op, comp, site, clean_notes if clean_notes else "N/A"
 
@@ -261,10 +265,9 @@ def process_paq_file(file_bytes, filename):
 
     found_comments, found_recipes, found_probes = [], [], []
     for s in raw_texts:
-        # --- ดักจับ Recipe ก่อนเพื่อป้องกันการถูกข้ามเมื่อมีตัวหนังสือ Path ซ่อนอยู่ ---
         is_recipe = re.search(r'\b(O2 Exit|ppm|CV speed|mm/min|N2 Flow|WJ Flow|Top Temp|Bot temp|SP1|SP2\s*==>|Braze Temp)\b', s, re.IGNORECASE)
         if is_recipe:
-            s_rec = re.split(r'\b[A-Za-z]:\\', s)[0] # ตัดทิ้งตั้งแต่เริ่มเจอ Path เช่น C:\Program Files
+            s_rec = re.split(r'\b[A-Za-z]:\\', s)[0]
             s_rec = re.split(r'\bdouble m\b', s_rec, flags=re.IGNORECASE)[0]
             s_rec = re.sub(r'\b(?:CProcessFile|COven|CZone|CRecipe|CProduct|CAnalysisParameters|CToleranceCurve|CAlarmParametersDouble|CMaximumMinimumAnalysisParameters|CTimeAtMeasurementAnalysisParameters|CRiseFallAnalysisParameters|CSlopeAnalysisParameters|CPeakDifferenceAnalysisParameters|CAreaUnderCurveAnalysisParameters|CFurnaceSurveyAnalysisParameters)\b', '', s_rec).strip()
             s_rec = re.sub(r'^[>#;\.,\|]+', '', s_rec).strip()
@@ -274,7 +277,6 @@ def process_paq_file(file_bytes, filename):
             s_rec = re.sub(r'(Braze Temp)', r'\n\1', s_rec)
             if s_rec and s_rec not in found_recipes: found_recipes.append(s_rec)
             continue
-        # -------------------------------------------------------------------
         
         if re.search(r'\\\\|\b[A-Z]:\\', s) or re.search(r'\.(ovn|prd|pro|rec|paq|jpg|png|bmp)\b', s, re.IGNORECASE) or re.search(r'\\Users\\|Desktop', s, re.IGNORECASE): continue
         s_clean = clean_paq_text(s)
@@ -292,16 +294,29 @@ def process_paq_file(file_bytes, filename):
             idx = int(m.group(1))
             ch_key = f"PB#{idx}"
             loc_desc = clean_probe_location(m.group(2).strip())
+            
+            # --- FIX REQ 4: Filter out comment strings assigned incorrectly as Probe Locations ---
+            if re.search(r'(validation|product|new bar|WK\d)', loc_desc, re.IGNORECASE) or len(loc_desc) > 40:
+                if loc_desc not in found_comments: found_comments.append(loc_desc)
+                continue
+                
             label = f"#{idx} (°C) {loc_desc}"
-            if ch_key not in probe_locations or len(label) > len(probe_locations[ch_key]):
+            if ch_key not in probe_locations or len(label) > len(probe_locations.get(ch_key, "")):
                 probe_locations[ch_key] = label
+                
     unassigned_probes = [p for p in found_probes if not re.search(r'^#?[1-8]\s*[\(°C\)]', p)]
     assigned_idx = 1
     for p in unassigned_probes:
         while f"PB#{assigned_idx}" in probe_locations and assigned_idx <= 8: assigned_idx += 1
         if assigned_idx > 8: break
+        
+        # Don't add garbage/comment text to unassigned probes
+        if re.search(r'(validation|product|new bar)', p, re.IGNORECASE) or len(p) > 40:
+             continue
+             
         probe_locations[f"PB#{assigned_idx}"] = f"#{assigned_idx} (°C) {clean_probe_location(p)}"
         assigned_idx += 1
+        
     for col in probe_cols:
         if col not in probe_locations: probe_locations[col] = f"Channel {col.replace('PB#', '')} (Unlabeled)"
 
