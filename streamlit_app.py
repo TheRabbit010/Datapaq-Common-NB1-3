@@ -15,7 +15,6 @@ from PIL import Image
 # ==============================================================================
 st.set_page_config(page_title="Datapaq .PAQ Analyzer & Furnace Profiler", page_icon="🔥", layout="wide", initial_sidebar_state="expanded")
 
-# แก้ไขขนาดฟอนต์ Metric ให้เล็กลง เพื่อไม่ให้ Confirmed Furnace ถูกตัดคำ
 st.markdown("""
 <style>
 div[data-testid="stMetricValue"] { font-size: 1.8rem !important; font-weight: 700 !important; white-space: normal !important; line-height: 1.2 !important; }
@@ -131,7 +130,8 @@ def format_dwell_time(total_seconds):
 def clean_paq_text(raw_text):
     if not raw_text: return ""
     text = re.split(r'\\\\', raw_text)[0]
-    parts = re.split(r'\b(?:CProbe|CSampleInterval|CAxisCustomUnits|CPaqfile|CByteDataArray|CProbeResult|CFurnaceRecipe|CZoom|CProbeMapEntry\w*|cho1-sv|CProcessFile|COven|CZone|CRecipe|CProduct|CAnalysisParameters|CAlarmParameters|CAlarmProbes|CAlarmParametersTime|CRiseFallRange|CTemperatureLimits|CTimeLimits|CCustomUnits|CLineSpeed|COvenStart|CProcessOptimisation|CToleranceCurve)\b', text)
+    # ปรับปรุง: เพิ่มคลาสระบบของ Datapaq ลงไปในจุดตัด เพื่อไม่ให้มีคำแปลกๆ หลุดเข้าไป
+    parts = re.split(r'\b(?:CProbe|CSampleInterval|CAxisCustomUnits|CPaqfile|CByteDataArray|CProbeResult|CFurnaceRecipe|CZoom|CProbeMapEntry\w*|cho1-sv|CProcessFile|COven|CZone|CRecipe|CProduct|CAnalysisParameters|CAlarmParameters|CAlarmProbes|CAlarmParametersTime|CRiseFallRange|CTemperatureLimits|CTimeLimits|CCustomUnits|CLineSpeed|COvenStart|CProcessOptimisation|CToleranceCurve|CVersionInfo|CLogger|CSystemInfo|CMaximumMinimumAnalysisParameters|CTimeAtMeasurementAnalysisParameters)\b', text)
     cleaned_parts = []
     for p in parts:
         p = re.sub(r'^[>#;\.,\|]+', '', p).strip() 
@@ -161,12 +161,13 @@ def parse_operator_and_metadata(comments_list):
     elif re.search(r'\b(Niwat|Sunisa|Mongkhon)\b', combined_clean_start, re.IGNORECASE):
         op = re.search(r'\b(Niwat|Sunisa|Mongkhon)\b', combined_clean_start, re.IGNORECASE).group(1).strip()
 
+    # ปรับปรุง: ตัดขยะที่เจอบ่อยๆ ออกให้หมด
     chopped_comment = re.split(r'\b(Untitled|Entry Zone|VSTS Exit Dryer|Exit Dryer|0Hl|!@f|"onB|aaa\.\.\.|FFGCC|bbbRRR|LNNSQ|OD@)\b', combined_clean_start, flags=re.IGNORECASE)[0]
     clean_notes = chopped_comment
     
     # --- ตัดข้อความ Log ทิ้งอย่างเด็ดขาดเพื่อไม่ให้มีข้อความขยะเหลืออยู่เลย ---
-    # เพิ่ม (USB_VALID), CommsIn, LoggerState, trigger_search เข้าไปในเงื่อนไขการตัดคำ
-    log_marker = re.search(r'(disconnected:|DBLog Cleared:|DP2300 EFM32|CommIn:LOGGER_|USB_NOTIFY_|TickRate|VBatt|\(USB_VALID\)|CommsIn\s+\d+|LoggerState_NewState:|trigger_search)', clean_notes, flags=re.IGNORECASE)
+    # ปรับปรุง: เพิ่มการดักจับ Serial, Firmware, DPXXXX ฯลฯ
+    log_marker = re.search(r'(disconnected:|DBLog Cleared:|DP2300|CommIn:LOGGER_|USB_NOTIFY_|TickRate|VBatt|\(USB_VALID\)|CommsIn\s+\d+|LoggerState_NewState:|trigger_search|DP\d{4}|Logger:|Battery:|Firmware:|Serial No:)', clean_notes, flags=re.IGNORECASE)
     if log_marker:
         clean_notes = clean_notes[:log_marker.start()].strip()
     
@@ -179,15 +180,28 @@ def parse_operator_and_metadata(comments_list):
     if split_match: clean_notes = split_match.group(1).strip()
     
     clean_notes = re.sub(r'NB\s+with\s+Debinder\s+NB\s+Furnace\s+Total\s*;\s*[\d,]+\s*mm', '', clean_notes, flags=re.IGNORECASE)
-    # ลบเฉพาะชื่อโซนเตาอบ (เอา Product Model เช่น G100 ออกจากรายการนี้เพื่อไม่ให้ถูกลบ)
     clean_notes = re.sub(r'\b(Dryer Z|Air Cool|Exit Zone|EXT Dryer|ENT DB|DB Z)\b', '', clean_notes, flags=re.IGNORECASE)
     
     garbage_start = re.search(r'([A-Za-z]\\[A-Za-z]|[\$\#\^\~]{2,}|\?[A-Z]{2,}|[a-z]{2,}\~|\bKO\\|\b\d{1,2}:\d{1,2}[A-Z]+)', clean_notes)
     if garbage_start:
         clean_notes = clean_notes[:garbage_start.start()]
         
-    garbage_regex = r'(C:\\Program Files|IJ@1|a@FGr|YW@\.|dhmquz|QUZ|rx\s+knv|V\^e|ipyw~|MSYmqw~|AFMEKO|FIL257|CVersionInfo|1w-!|zfo@|8gDi|R@\?m|MQTDFI|HKN\*,)'
+    # ปรับปรุง: ดักจับชื่อคลาสที่ขึ้นต้นด้วยตัว C หรือกลุ่มคำแปลกๆ เช่น Double m
+    garbage_regex = r'(C:\\Program Files|IJ@1|a@FGr|YW@\.|dhmquz|QUZ|rx\s+knv|V\^e|ipyw~|MSYmqw~|AFMEKO|FIL257|CVersionInfo|1w-!|zfo@|8gDi|R@\?m|MQTDFI|HKN\*,|Double m\b|double m\b|C[A-Z][a-z]+[A-Za-z]+)'
     clean_notes = re.split(garbage_regex, clean_notes, flags=re.IGNORECASE)[0]
+    
+    # --- เริ่มต้นส่วนทำความสะอาดเฉพาะข้อความแปลกปลอม ---
+    # 1. ลบลิงก์, File path, หรือ URL ที่ทำให้เกิดแถบสีฟ้า (Hyperlink) ใน UI ของ Streamlit
+    clean_notes = re.sub(r'(?i)\b[a-z]:\\[^\s]*', '', clean_notes) # C:\Folder...
+    clean_notes = re.sub(r'(?i)https?://[^\s]*', '', clean_notes) # http://...
+    clean_notes = re.sub(r'(?i)\\\\[a-z0-9_]+\\[^\s]*', '', clean_notes) # \\Server\Folder...
+    
+    # 2. กรองเฉพาะตัวอักษร, ตัวเลข, และเครื่องหมายที่ใช้อ่านทั่วไป (ลบอักขระพิเศษขยะจาก Binary)
+    clean_notes = re.sub(r'[^\w\s\.\,\-\/\(\)]', ' ', clean_notes)
+    
+    # 3. ลบคำที่ประกอบด้วยตัวพิมพ์ใหญ่หรือเลขติดกันยาวผิดปกติ (Serial / Hex Code)
+    clean_notes = re.sub(r'\b[A-Z0-9]{10,}\b', '', clean_notes) 
+    # ------------------------------------------------
     
     clean_notes = re.sub(r'\s{2,}', ' ', clean_notes)
     clean_notes = re.sub(r'^[.,;\s]+', '', clean_notes)
@@ -285,9 +299,7 @@ def process_paq_file(file_bytes, filename):
         s_clean = clean_paq_text(s)
         if not s_clean: continue
         
-        # --- ตัวกรอง Note แบบเข้มข้น ---
         is_probe = re.search(r'\b(cooler|drill&insert|inside H/D|manifold|core|PB#\d)\b', s_clean, re.IGNORECASE)
-        # ป้องกันไม่ให้ข้อความที่มีคำว่า core แต่เป็น Note จริงๆ (เช่น Loaded 3 cores) หลุดไปเป็น Probe
         is_note = re.search(r'\b(validation|product|new bar|WK\d|Loaded|Model|week\d|date\d)\b', s_clean, re.IGNORECASE)
         
         if is_probe and not is_note:
@@ -312,7 +324,7 @@ def process_paq_file(file_bytes, filename):
     for p in unassigned_probes:
         while f"PB#{assigned_idx}" in probe_locations and assigned_idx <= 8: assigned_idx += 1
         if assigned_idx > 8: break
-             
+              
         probe_locations[f"PB#{assigned_idx}"] = f"#{assigned_idx} (°C) {clean_probe_location(p)}"
         assigned_idx += 1
         
