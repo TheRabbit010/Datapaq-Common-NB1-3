@@ -15,7 +15,6 @@ from PIL import Image
 # ==============================================================================
 st.set_page_config(page_title="Datapaq .PAQ Analyzer & Furnace Profiler", page_icon="🔥", layout="wide", initial_sidebar_state="expanded")
 
-# แก้ไขขนาดฟอนต์ Metric ให้เล็กลง เพื่อไม่ให้ Confirmed Furnace ถูกตัดคำ
 st.markdown("""
 <style>
 div[data-testid="stMetricValue"] { font-size: 1.8rem !important; font-weight: 700 !important; white-space: normal !important; line-height: 1.2 !important; }
@@ -164,10 +163,18 @@ def parse_operator_and_metadata(comments_list):
     chopped_comment = re.split(r'\b(Untitled|Entry Zone|VSTS Exit Dryer|Exit Dryer|0Hl|!@f|"onB|aaa\.\.\.|FFGCC|bbbRRR|LNNSQ|OD@)\b', combined_clean_start, flags=re.IGNORECASE)[0]
     clean_notes = chopped_comment
     
-    # --- ตัดข้อความ Log ทิ้งอย่างเด็ดขาดเพื่อไม่ให้มีข้อความขยะเหลืออยู่เลย ---
-    log_marker = re.search(r'\b(disconnected:|DBLog Cleared:|DP2300 EFM32|CommIn:LOGGER_|USB_NOTIFY_|TickRate|VBatt)\b', clean_notes, flags=re.IGNORECASE)
-    if log_marker:
-        clean_notes = clean_notes[:log_marker.start()].strip()
+    # --- ใช้ Regex เพื่อลบเฉพาะส่วนที่เป็น Log ของ Datapaq และเก็บ Note ผู้ใช้ไว้ ---
+    log_patterns = [
+        r'(DBLog Cleared:|disconnected:).*?(PwrChng\s*\d+|pass COUT to|Device is not configured\))',
+        r'DP2300\s+EFM32.*?(TickRate\s*=\s*\d+\s*Hz|VBatt\s*\d+\s*uV)',
+        r'Clock set:.*?(PwrChng\s*\d+|VBUS)',
+        r'CommIn:LOGGER_.*?(Comms:|CommsState\s*\d+)',
+        r'Received USB_NOTIFY_.*?(CommsState\s*\d+|isBT\s*\d+)',
+        r'RequsetCode\s*\d+\s*pass COUT to',
+        r'\b\d{2}:\d{2}:\d{2}\s+\d{2}/\d{2}/\d{4}\b' # ลบเวลาที่เป็น Time Stamp ลอยๆ
+    ]
+    for pattern in log_patterns:
+        clean_notes = re.sub(pattern, ' ', clean_notes, flags=re.IGNORECASE | re.DOTALL)
     
     for token in [op, "Datapaq", "VSTS", site, "CAlarm"]:
         if token != "N/A":
@@ -178,7 +185,8 @@ def parse_operator_and_metadata(comments_list):
     if split_match: clean_notes = split_match.group(1).strip()
     
     clean_notes = re.sub(r'NB\s+with\s+Debinder\s+NB\s+Furnace\s+Total\s*;\s*[\d,]+\s*mm', '', clean_notes, flags=re.IGNORECASE)
-    clean_notes = re.sub(r'\b(Dryer Z|Air Cool|Exit|EXT Dryer|ENT DB|DB Z|RAD|SU2|12XHP|68T|G100|CV2-2-2|NB1|12XHP68Tube)\b', '', clean_notes, flags=re.IGNORECASE)
+    # ลบเฉพาะชื่อโซนเตาอบ (เอา Product Model เช่น G100 ออกจากรายการนี้เพื่อไม่ให้ถูกลบ)
+    clean_notes = re.sub(r'\b(Dryer Z|Air Cool|Exit Zone|EXT Dryer|ENT DB|DB Z)\b', '', clean_notes, flags=re.IGNORECASE)
     
     garbage_start = re.search(r'([A-Za-z]\\[A-Za-z]|[\$\#\^\~]{2,}|\?[A-Z]{2,}|[a-z]{2,}\~|\bKO\\|\b\d{1,2}:\d{1,2}[A-Z]+)', clean_notes)
     if garbage_start:
@@ -282,8 +290,13 @@ def process_paq_file(file_bytes, filename):
         if re.search(r'\\\\|\b[A-Z]:\\', s) or re.search(r'\.(ovn|prd|pro|rec|paq|jpg|png|bmp)\b', s, re.IGNORECASE) or re.search(r'\\Users\\|Desktop', s, re.IGNORECASE): continue
         s_clean = clean_paq_text(s)
         if not s_clean: continue
-        is_probe = re.search(r'\b(cooler|drill&insert|inside H/D|manifold|core)\b', s_clean, re.IGNORECASE)
-        if is_probe:
+        
+        # --- ตัวกรอง Note แบบเข้มข้น ---
+        is_probe = re.search(r'\b(cooler|drill&insert|inside H/D|manifold|core|PB#\d)\b', s_clean, re.IGNORECASE)
+        # ป้องกันไม่ให้ข้อความที่มีคำว่า core แต่เป็น Note จริงๆ (เช่น Loaded 3 cores) หลุดไปเป็น Probe
+        is_note = re.search(r'\b(validation|product|new bar|WK\d|Loaded|Model|week\d|date\d)\b', s_clean, re.IGNORECASE)
+        
+        if is_probe and not is_note:
             if s_clean not in found_probes: found_probes.append(s_clean)
         else:
             if s_clean not in found_comments: found_comments.append(s_clean)
@@ -296,10 +309,6 @@ def process_paq_file(file_bytes, filename):
             ch_key = f"PB#{idx}"
             loc_desc = clean_probe_location(m.group(2).strip())
             
-            if re.search(r'(validation|product|new bar|WK\d)', loc_desc, re.IGNORECASE) or len(loc_desc) > 40:
-                if loc_desc not in found_comments: found_comments.append(loc_desc)
-                continue
-                
             label = f"#{idx} (°C) {loc_desc}"
             if ch_key not in probe_locations or len(label) > len(probe_locations.get(ch_key, "")):
                 probe_locations[ch_key] = label
@@ -309,9 +318,6 @@ def process_paq_file(file_bytes, filename):
     for p in unassigned_probes:
         while f"PB#{assigned_idx}" in probe_locations and assigned_idx <= 8: assigned_idx += 1
         if assigned_idx > 8: break
-        
-        if re.search(r'(validation|product|new bar)', p, re.IGNORECASE) or len(p) > 40:
-             continue
              
         probe_locations[f"PB#{assigned_idx}"] = f"#{assigned_idx} (°C) {clean_probe_location(p)}"
         assigned_idx += 1
@@ -404,7 +410,7 @@ else:
     m_col2.metric("Conveyor Speed", f"{data1['line_speed_mpm']:.3f} m/min")
     m_col3.metric("Time in Furnace", f"{furnace_duration_secs}s (~{furnace_duration_mins:.1f} min)")
 
-    tabs = st.tabs(["📊 Profile Graphs", "🏭 Zone & Stage Summary", "📈 Statistics & Boxplots", "💾 Master Dataset & Export", "⚖️️ Compare Files"])
+    tabs = st.tabs(["📊 Profile Graphs", "🏭 Zone & Stage Summary", "📈 Statistics & Boxplots", "💾 Master Dataset & Export", "⚖️ Compare Files"])
 
     with tabs[0]:
         st.subheader("Global Furnace Profile")
@@ -485,13 +491,9 @@ else:
         </div>
         """, unsafe_allow_html=True)
 
-        # จองพื้นที่สำหรับแสดงตารางไว้ก่อน
         matrix_placeholder = st.empty()
-
-        # นำ Checkbox มาไว้ด้านล่างตาราง ก่อนจะแสดง Overall Status
         check_dryer = st.checkbox("🔍 ตรวจสอบเกณฑ์ Dryer Max Temp & Dwell Time / Evaluate Dryer Max & Dwell", value=False)
 
-        # สร้าง DataFrame และแสดงผลในพื้นที่ที่จองไว้ 
         df_matrix = pd.DataFrame(matrix_rows)
         format_dict = {col: "{:.1f}" for col in df_matrix.columns if "Max (°C)" in col}
         matrix_placeholder.dataframe(
