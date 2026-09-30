@@ -130,7 +130,6 @@ def format_dwell_time(total_seconds):
 def clean_paq_text(raw_text):
     if not raw_text: return ""
     text = re.split(r'\\\\', raw_text)[0]
-    # ปรับปรุง: เพิ่มคลาสระบบของ Datapaq ลงไปในจุดตัด เพื่อไม่ให้มีคำแปลกๆ หลุดเข้าไป
     parts = re.split(r'\b(?:CProbe|CSampleInterval|CAxisCustomUnits|CPaqfile|CByteDataArray|CProbeResult|CFurnaceRecipe|CZoom|CProbeMapEntry\w*|cho1-sv|CProcessFile|COven|CZone|CRecipe|CProduct|CAnalysisParameters|CAlarmParameters|CAlarmProbes|CAlarmParametersTime|CRiseFallRange|CTemperatureLimits|CTimeLimits|CCustomUnits|CLineSpeed|COvenStart|CProcessOptimisation|CToleranceCurve|CVersionInfo|CLogger|CSystemInfo|CMaximumMinimumAnalysisParameters|CTimeAtMeasurementAnalysisParameters)\b', text)
     cleaned_parts = []
     for p in parts:
@@ -161,20 +160,17 @@ def parse_operator_and_metadata(comments_list):
     elif re.search(r'\b(Niwat|Sunisa|Mongkhon)\b', combined_clean_start, re.IGNORECASE):
         op = re.search(r'\b(Niwat|Sunisa|Mongkhon)\b', combined_clean_start, re.IGNORECASE).group(1).strip()
 
-    # ปรับปรุง: ตัดขยะที่เจอบ่อยๆ ออกให้หมด
     chopped_comment = re.split(r'\b(Untitled|Entry Zone|VSTS Exit Dryer|Exit Dryer|0Hl|!@f|"onB|aaa\.\.\.|FFGCC|bbbRRR|LNNSQ|OD@)\b', combined_clean_start, flags=re.IGNORECASE)[0]
     clean_notes = chopped_comment
     
-    # --- ตัดข้อความ Log ทิ้งอย่างเด็ดขาดเพื่อไม่ให้มีข้อความขยะเหลืออยู่เลย ---
-    # ปรับปรุง: เพิ่มการดักจับ Serial, Firmware, DPXXXX ฯลฯ
     log_marker = re.search(r'(disconnected:|DBLog Cleared:|DP2300|CommIn:LOGGER_|USB_NOTIFY_|TickRate|VBatt|\(USB_VALID\)|CommsIn\s+\d+|LoggerState_NewState:|trigger_search|DP\d{4}|Logger:|Battery:|Firmware:|Serial No:)', clean_notes, flags=re.IGNORECASE)
     if log_marker:
         clean_notes = clean_notes[:log_marker.start()].strip()
     
-    for token in [op, "Datapaq", "VSTS", site, "CAlarm"]:
+    # อัปเดต: ปรับให้ลบคำเฉพาะตอนที่อยู่ "ด้านหน้าสุด" เท่านั้น เพื่อป้องกันไม่ให้ไปลบข้อความในประโยค (เช่น Model before/after datapaq)
+    for token in [op, "VSTS", site, "CAlarm"]:
         if token != "N/A":
             clean_notes = re.sub(rf'^\s*{re.escape(token)}\b\s*', '', clean_notes, flags=re.IGNORECASE)
-            clean_notes = re.sub(rf'\s+\b{re.escape(token)}\b\s+', ' ', clean_notes, flags=re.IGNORECASE)
 
     split_match = re.search(r'(.*?)(?:\s+)?\b([A-Za-z]?Middle\s+left|[A-Za-z]?Middle\s+right|[A-Za-z]?Left\s+core|[A-Za-z]?Right\s+core|Bottom cooler|Top cooler)\b', clean_notes, flags=re.IGNORECASE)
     if split_match: clean_notes = split_match.group(1).strip()
@@ -186,22 +182,14 @@ def parse_operator_and_metadata(comments_list):
     if garbage_start:
         clean_notes = clean_notes[:garbage_start.start()]
         
-    # ปรับปรุง: ดักจับชื่อคลาสที่ขึ้นต้นด้วยตัว C หรือกลุ่มคำแปลกๆ เช่น Double m
     garbage_regex = r'(C:\\Program Files|IJ@1|a@FGr|YW@\.|dhmquz|QUZ|rx\s+knv|V\^e|ipyw~|MSYmqw~|AFMEKO|FIL257|CVersionInfo|1w-!|zfo@|8gDi|R@\?m|MQTDFI|HKN\*,|Double m\b|double m\b|C[A-Z][a-z]+[A-Za-z]+)'
     clean_notes = re.split(garbage_regex, clean_notes, flags=re.IGNORECASE)[0]
     
-    # --- เริ่มต้นส่วนทำความสะอาดเฉพาะข้อความแปลกปลอม ---
-    # 1. ลบลิงก์, File path, หรือ URL ที่ทำให้เกิดแถบสีฟ้า (Hyperlink) ใน UI ของ Streamlit
-    clean_notes = re.sub(r'(?i)\b[a-z]:\\[^\s]*', '', clean_notes) # C:\Folder...
-    clean_notes = re.sub(r'(?i)https?://[^\s]*', '', clean_notes) # http://...
-    clean_notes = re.sub(r'(?i)\\\\[a-z0-9_]+\\[^\s]*', '', clean_notes) # \\Server\Folder...
-    
-    # 2. กรองเฉพาะตัวอักษร, ตัวเลข, และเครื่องหมายที่ใช้อ่านทั่วไป (ลบอักขระพิเศษขยะจาก Binary)
-    clean_notes = re.sub(r'[^\w\s\.\,\-\/\(\)]', ' ', clean_notes)
-    
-    # 3. ลบคำที่ประกอบด้วยตัวพิมพ์ใหญ่หรือเลขติดกันยาวผิดปกติ (Serial / Hex Code)
+    clean_notes = re.sub(r'(?i)\b[a-z]:\\[^\s]*', '', clean_notes)
+    clean_notes = re.sub(r'(?i)https?://[^\s]*', '', clean_notes)
+    clean_notes = re.sub(r'(?i)\\\\[a-z0-9_]+\\[^\s]*', '', clean_notes)
+    clean_notes = re.sub(r'[^\w\s\.\,\-\/\(\)\=\+]', ' ', clean_notes) # เพิ่ม = และ + เพื่อรองรับข้อความ Note
     clean_notes = re.sub(r'\b[A-Z0-9]{10,}\b', '', clean_notes) 
-    # ------------------------------------------------
     
     clean_notes = re.sub(r'\s{2,}', ' ', clean_notes)
     clean_notes = re.sub(r'^[.,;\s]+', '', clean_notes)
@@ -658,9 +646,30 @@ else:
             else:
                 df_m2 = data2["df_master"]
                 fig_comp = go.Figure()
+                
+                # --- อัปเดต: เพิ่มการแสดงผล Background Zones แบบเดียวกันกับใน Global Profile ---
+                for z in zones:
+                    z_color = GROUP_COLORS.get(z["group"], "rgba(200, 200, 200, 0.2)")
+                    fig_comp.add_vrect(
+                        x0=z["start"], x1=z["start"] + z["length"], 
+                        fillcolor=z_color, layer="below", line_width=0.5, 
+                        line_dash="dot", line_color="rgba(120, 120, 120, 0.4)", 
+                        annotation_text=f"{z['num']}.{z['name']}", 
+                        annotation_position="top left", 
+                        annotation=dict(font_size=9, font_color="#a0aab2", textangle=-90)
+                    )
+                
+                # --- อัปเดต: เพิ่มเส้นอ้างอิงอุณหภูมิ Brazing แนวนอน ---
+                fig_comp.add_hline(
+                    y=cfg["trigger_temp_brazing"], line_dash="dash", line_color="red", 
+                    annotation_text=f"Brazing ({cfg['trigger_temp_brazing']}°C)", 
+                    annotation_position="bottom right"
+                )
+                
                 for col in probe_cols:
                     if col in df_m1.columns: fig_comp.add_trace(go.Scatter(x=df_m1["Distance_Meters"], y=df_m1[col], mode="lines", name=f"F1: {col}", line=dict(color=PROBE_COLORS.get(col), width=1.5)))
                 for col in data2["probe_cols"]:
                     if col in df_m2.columns: fig_comp.add_trace(go.Scatter(x=df_m2["Distance_Meters"], y=df_m2[col], mode="lines", name=f"F2: {col}", line=dict(dash='dash', color=PROBE_COLORS.get(col), width=1.5)))
+                
                 fig_comp.update_layout(title=f"COMPARISON: {data1['filename']} vs {data2['filename']}", xaxis=dict(title="Distance (Meters)", range=[-1, total_furnace_length + 2]), yaxis_title="Temperature (°C)", hovermode="x unified", template="plotly_white", height=600)
                 st.plotly_chart(fig_comp, use_container_width=True)
