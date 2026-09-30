@@ -32,7 +32,7 @@ GROUP_COLORS = {"Dryer": "rgba(255, 235, 156, 0.15)", "Debinder": "rgba(255, 199
 STANDARD_SPECS = {
     "NB1 (RAD)": {"id": "PRCNVR02044", "max": "Dryer: 175-260°C &nbsp;|&nbsp; Debinder: 200-375°C &nbsp;|&nbsp; Brazing: 583-607°C", "dwell": "Dryer ≥175°C ≥ 1.00 min &nbsp;|&nbsp; Debinder ≥200°C ≥ 2.00 min &nbsp;|&nbsp; Brazing ≥577°C = 2.30 - 7.00 min, ≥583°C ≥ 2.30 min"},
     "NB1 (CDS/KN9/12SHP)": {"id": "PRCNVR02004", "max": "Dryer: 200-350°C &nbsp;|&nbsp; Debinder: 300-375°C &nbsp;|&nbsp; Brazing: 585-607°C", "dwell": "Dryer ≥200°C ≥ 1.30 min &nbsp;|&nbsp; Debinder ≥300°C ≥ 2.30 min &nbsp;|&nbsp; Brazing ≥577°C = 4.00 - 7.45 min"},
-    "NB3 (KE8/M2/EVO)": {"id": "PRCNVR02059 (Evaporator M2 ,EVO)", "max": "Dryer: 200-375°C &nbsp;|&nbsp; Brazing: M2 = 595-602°C , EVO = 598-606°C", "dwell": "Dryer ≥200°C ≥ 1.30 min &nbsp;|&nbsp; Brazing ≥550°C = 7.00 - 10.30 min, ≥577°C = 4.30 - 7.00 min, ≥591°C = 1.30 - 4.00 min"},
+    "NB3 (KE8 : M2/EVO)": {"id": "PRCNVR02059 + V-PAS/T88/Chon Buri 1/2025-10-29-ZVK (Evaporator M2 ,EVO)", "max": "Dryer: 200-375°C &nbsp;|&nbsp; Brazing: M2 = 595-602°C , EVO = 598-606°C", "dwell": "Dryer ≥200°C ≥ 1.30 min &nbsp;|&nbsp; Brazing ≥550°C = 7.00 - 10.30 min, ≥577°C = 4.30 - 7.00 min, ≥591°C = 1.30 - 4.00 min"},
     "NB2 (Tahc/Utahc)": {"id": "PRCNVR02050", "max": "Dryer: 200-375°C &nbsp;|&nbsp; Brazing: 596-604°C", "dwell": "Dryer ≥250°C ≥ 1.00 min &nbsp;|&nbsp; Brazing ≥577°C = 4.00 - 7.00 min, ≥591°C = 1.30 - 4.30 min"},
     "NB3 (BTM)": {"id": "PRCNVR02033", "max": "Dryer: 300-375°C &nbsp;|&nbsp; Brazing: 595-608°C", "dwell": "Dryer ≥300°C ≥ 2.00 min &nbsp;|&nbsp; Brazing ≥577°C = 4.00 - 14.00 min, ≥591°C = 2.00 - 12.00 min, ≥600°C ≤ 8.00 min"}
 }
@@ -40,7 +40,7 @@ STANDARD_SPECS = {
 VALIDATION_RULES = {
     "NB1 (RAD)": {"Dryer Max (°C)": (175, 260), "Debinder Max (°C)": (200, 375), "Brazing Max (°C)": (583, 607), "Dryer Dwell (≥175°C)": (60, 99999), "Debinder Dwell (≥200°C)": (120, 99999), "Brazing Dwell (≥577°C)": (150, 420), "Brazing Dwell (≥583°C)": (150, 99999)},
     "NB1 (CDS/KN9/12SHP)": {"Dryer Max (°C)": (200, 350), "Debinder Max (°C)": (300, 375), "Brazing Max (°C)": (585, 607), "Dryer Dwell (≥200°C)": (90, 99999), "Debinder Dwell (≥300°C)": (150, 99999), "Brazing Dwell (≥577°C)": (240, 465)},
-    "NB3 (KE8/M2/EVO)": {"Dryer Max (°C)": (200, 375), "Brazing Max (°C)": (595, 606), "Dryer Dwell (≥200°C)": (90, 99999), "Brazing Dwell (≥550°C)": (420, 630), "Brazing Dwell (≥577°C)": (270, 420), "Brazing Dwell (≥591°C)": (90, 240)},
+    "NB3 (KE8 : M2/EVO)": {"Dryer Max (°C)": (200, 375), "Brazing Max (°C)": (595, 606), "Dryer Dwell (≥200°C)": (90, 99999), "Brazing Dwell (≥550°C)": (420, 630), "Brazing Dwell (≥577°C)": (270, 420), "Brazing Dwell (≥591°C)": (90, 240)},
     "NB2 (Tahc/Utahc)": {"Dryer Max (°C)": (200, 375), "Brazing Max (°C)": (596, 604), "Dryer Dwell (≥250°C)": (60, 99999), "Brazing Dwell (≥577°C)": (240, 420), "Brazing Dwell (≥591°C)": (90, 270)},
     "NB3 (BTM)": {"Dryer Max (°C)": (300, 375), "Brazing Max (°C)": (595, 608), "Dryer Dwell (≥300°C)": (120, 99999), "Brazing Dwell (≥577°C)": (240, 840), "Brazing Dwell (≥591°C)": (120, 720), "Brazing Dwell (≥600°C)": (0, 480)}
 }
@@ -53,7 +53,6 @@ def style_inspection_matrix(row, variant, check_dryer_max=False):
         val = row[col]
         rule = rules.get(col)
         
-        # --- FIX REQ 3: Skip evaluate for both Dryer Max AND Dryer Dwell when unchecked ---
         if not check_dryer_max and ("Dryer Max" in col or "Dryer Dwell" in col):
             rule = None
             
@@ -156,16 +155,18 @@ def parse_operator_and_metadata(comments_list):
     
     combined_clean_start = re.sub(r'^\s*CAlarm\s*', '', combined, flags=re.IGNORECASE)
     
-    # --- FIX REQ 2: Add 'disconnected' to regex to correctly extract names like Mongkhon ---
-    m_op = re.search(r'^([A-Za-z/]+)\s+(?:Monthly|WK|date|product|validation|run|test|DBLog|disconnected)', combined_clean_start, re.IGNORECASE)
+    # --- FIX REQ 2: Enhanced regex to correctly extract names like 'Mongkhon' even if followed directly by site name ---
+    m_op = re.search(r'^([A-Za-z/]+)\s+(?:Monthly|WK|date|product|validation|run|test|DBLog|disconnected|Power|Chonburi|Plant|Factory)', combined_clean_start, re.IGNORECASE)
     if m_op: op = m_op.group(1).strip()
-    elif "Niwat" in combined_clean_start: op = "Niwat"
-    elif "Sunisa" in combined_clean_start: op = "Sunisa"
+    elif re.search(r'\b(Niwat|Sunisa|Mongkhon)\b', combined_clean_start, re.IGNORECASE):
+        op = re.search(r'\b(Niwat|Sunisa|Mongkhon)\b', combined_clean_start, re.IGNORECASE).group(1).strip()
 
     chopped_comment = re.split(r'\b(Untitled|Entry Zone|VSTS Exit Dryer|Exit Dryer|0Hl|!@f|"onB|aaa\.\.\.|FFGCC|bbbRRR|LNNSQ|OD@)\b', combined_clean_start, flags=re.IGNORECASE)[0]
+    
+    # Backup original comment before stripping
+    original_notes = chopped_comment.strip()
     clean_notes = chopped_comment
     
-    # --- FIX REQ 2: Robust Log Garbage Truncation (Removes USBnr, CPU Clock, etc.) ---
     log_marker = re.search(r'\b(disconnected:|DBLog Cleared:|DP2300 EFM32|CommIn:LOGGER_|USB_NOTIFY_)', clean_notes, flags=re.IGNORECASE)
     if log_marker:
         clean_notes = clean_notes[:log_marker.start()].strip()
@@ -191,6 +192,10 @@ def parse_operator_and_metadata(comments_list):
     clean_notes = re.sub(r'\s{2,}', ' ', clean_notes)
     clean_notes = re.sub(r'^[.,;\s]+', '', clean_notes)
     clean_notes = re.sub(r'[\.,\s]+$', '.', clean_notes).strip()
+    
+    # --- FIX REQ 2: Fallback to original text if the stripping resulted in an empty string ---
+    if not clean_notes or clean_notes == '.':
+        clean_notes = original_notes
     
     return op, comp, site, clean_notes if clean_notes else "N/A"
 
@@ -328,7 +333,7 @@ def process_paq_file(file_bytes, filename):
     if re.search(r'\bRAD\b', recipe_corpus, re.IGNORECASE): furnace_id, furnace_variant = "NB1", "NB1 (RAD)"
     elif re.search(r'\b(KE8|M2|EVO|BTM)\b', recipe_corpus, re.IGNORECASE):
         furnace_id = "NB3"
-        furnace_variant = "NB3 (BTM)" if re.search(r'\bBTM\b', recipe_corpus, re.IGNORECASE) else "NB3 (KE8/M2/EVO)"
+        furnace_variant = "NB3 (BTM)" if re.search(r'\bBTM\b', recipe_corpus, re.IGNORECASE) else "NB3 (KE8 : M2/EVO)"
     elif re.search(r'\b(Tahc|Utahc)\b', recipe_corpus, re.IGNORECASE): furnace_id, furnace_variant = "NB2", "NB2 (Tahc/Utahc)"
     elif re.search(r'\b(CDS|KN9|12SHP)\b', recipe_corpus, re.IGNORECASE): furnace_id, furnace_variant = "NB1", "NB1 (CDS/KN9/12SHP)"
     elif (re.search(r'\bWK\d{1,2}\b', recipe_corpus, re.IGNORECASE) or re.search(r'\b\d{6}\b', recipe_corpus)): furnace_id, furnace_variant = "NB1", "NB1 (Standard)"
@@ -466,7 +471,6 @@ else:
             desired_order = ["PB#1", "PB#2", "PB#3", "PB#8", "PB#4", "PB#5", "PB#6", "PB#7"]
             matrix_rows = sorted(matrix_rows, key=lambda x: desired_order.index(x["Probe"]) if x["Probe"] in desired_order else 99)
 
-        # --- FIX REQ 3: Updated checkbox text to reflect both Max & Dwell ---
         st.subheader(f"⏱️ Inspection Matrix — {f_variant}")
         check_dryer = st.checkbox("🔍 ตรวจสอบเกณฑ์ Dryer Max Temp & Dwell Time / Evaluate Dryer Max & Dwell", value=False)
         
@@ -501,7 +505,6 @@ else:
             for k, v in r.items():
                 if k == "Probe": continue
                 
-                # --- FIX REQ 3: Skip evaluate for both Dryer Max AND Dryer Dwell when unchecked ---
                 if not check_dryer and ("Dryer Max" in k or "Dryer Dwell" in k): continue 
                 
                 rule = val_rules.get(k)
