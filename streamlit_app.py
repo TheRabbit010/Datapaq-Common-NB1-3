@@ -15,9 +15,10 @@ from PIL import Image
 # ==============================================================================
 st.set_page_config(page_title="Datapaq .PAQ Analyzer & Furnace Profiler", page_icon="🔥", layout="wide", initial_sidebar_state="expanded")
 
+# แก้ไขขนาดฟอนต์ Metric ให้เล็กลง เพื่อไม่ให้ Confirmed Furnace ถูกตัดคำ
 st.markdown("""
 <style>
-div[data-testid="stMetricValue"] { font-size: 2.8rem !important; font-weight: 700 !important; }
+div[data-testid="stMetricValue"] { font-size: 1.8rem !important; font-weight: 700 !important; white-space: normal !important; line-height: 1.2 !important; }
 div[data-testid="stMetricLabel"] { font-size: 1.1rem !important; font-weight: 500 !important; color: #a0aab2 !important; }
 div.stButton > button:first-child { background-color: #ff4b4b; color: white; font-weight: bold; border-radius: 5px; width: 100%; margin-bottom: 20px; }
 div.stButton > button:first-child:hover { background-color: #ff3333; border-color: #ff3333; }
@@ -155,19 +156,16 @@ def parse_operator_and_metadata(comments_list):
     
     combined_clean_start = re.sub(r'^\s*CAlarm\s*', '', combined, flags=re.IGNORECASE)
     
-    # --- FIX REQ 2: Enhanced regex to correctly extract names like 'Mongkhon' even if followed directly by site name ---
     m_op = re.search(r'^([A-Za-z/]+)\s+(?:Monthly|WK|date|product|validation|run|test|DBLog|disconnected|Power|Chonburi|Plant|Factory)', combined_clean_start, re.IGNORECASE)
     if m_op: op = m_op.group(1).strip()
     elif re.search(r'\b(Niwat|Sunisa|Mongkhon)\b', combined_clean_start, re.IGNORECASE):
         op = re.search(r'\b(Niwat|Sunisa|Mongkhon)\b', combined_clean_start, re.IGNORECASE).group(1).strip()
 
     chopped_comment = re.split(r'\b(Untitled|Entry Zone|VSTS Exit Dryer|Exit Dryer|0Hl|!@f|"onB|aaa\.\.\.|FFGCC|bbbRRR|LNNSQ|OD@)\b', combined_clean_start, flags=re.IGNORECASE)[0]
-    
-    # Backup original comment before stripping
-    original_notes = chopped_comment.strip()
     clean_notes = chopped_comment
     
-    log_marker = re.search(r'\b(disconnected:|DBLog Cleared:|DP2300 EFM32|CommIn:LOGGER_|USB_NOTIFY_)', clean_notes, flags=re.IGNORECASE)
+    # --- ตัดข้อความ Log ทิ้งอย่างเด็ดขาดเพื่อไม่ให้มีข้อความขยะเหลืออยู่เลย ---
+    log_marker = re.search(r'\b(disconnected:|DBLog Cleared:|DP2300 EFM32|CommIn:LOGGER_|USB_NOTIFY_|TickRate|VBatt)\b', clean_notes, flags=re.IGNORECASE)
     if log_marker:
         clean_notes = clean_notes[:log_marker.start()].strip()
     
@@ -192,10 +190,6 @@ def parse_operator_and_metadata(comments_list):
     clean_notes = re.sub(r'\s{2,}', ' ', clean_notes)
     clean_notes = re.sub(r'^[.,;\s]+', '', clean_notes)
     clean_notes = re.sub(r'[\.,\s]+$', '.', clean_notes).strip()
-    
-    # --- FIX REQ 2: Fallback to original text if the stripping resulted in an empty string ---
-    if not clean_notes or clean_notes == '.':
-        clean_notes = original_notes
     
     return op, comp, site, clean_notes if clean_notes else "N/A"
 
@@ -410,7 +404,7 @@ else:
     m_col2.metric("Conveyor Speed", f"{data1['line_speed_mpm']:.3f} m/min")
     m_col3.metric("Time in Furnace", f"{furnace_duration_secs}s (~{furnace_duration_mins:.1f} min)")
 
-    tabs = st.tabs(["📊 Profile Graphs", "🏭 Zone & Stage Summary", "📈 Statistics & Boxplots", "💾 Master Dataset & Export", "⚖️ Compare Files"])
+    tabs = st.tabs(["📊 Profile Graphs", "🏭 Zone & Stage Summary", "📈 Statistics & Boxplots", "💾 Master Dataset & Export", "⚖️️ Compare Files"])
 
     with tabs[0]:
         st.subheader("Global Furnace Profile")
@@ -472,7 +466,6 @@ else:
             matrix_rows = sorted(matrix_rows, key=lambda x: desired_order.index(x["Probe"]) if x["Probe"] in desired_order else 99)
 
         st.subheader(f"⏱️ Inspection Matrix — {f_variant}")
-        check_dryer = st.checkbox("🔍 ตรวจสอบเกณฑ์ Dryer Max Temp & Dwell Time / Evaluate Dryer Max & Dwell", value=False)
         
         std_info = STANDARD_SPECS.get(f_variant)
         if std_info:
@@ -492,9 +485,19 @@ else:
         </div>
         """, unsafe_allow_html=True)
 
+        # จองพื้นที่สำหรับแสดงตารางไว้ก่อน
+        matrix_placeholder = st.empty()
+
+        # นำ Checkbox มาไว้ด้านล่างตาราง ก่อนจะแสดง Overall Status
+        check_dryer = st.checkbox("🔍 ตรวจสอบเกณฑ์ Dryer Max Temp & Dwell Time / Evaluate Dryer Max & Dwell", value=False)
+
+        # สร้าง DataFrame และแสดงผลในพื้นที่ที่จองไว้ 
         df_matrix = pd.DataFrame(matrix_rows)
         format_dict = {col: "{:.1f}" for col in df_matrix.columns if "Max (°C)" in col}
-        st.dataframe(df_matrix.style.apply(style_inspection_matrix, variant=f_variant, check_dryer_max=check_dryer, axis=1).format(format_dict, na_rep="N/A"), use_container_width=True, hide_index=True)
+        matrix_placeholder.dataframe(
+            df_matrix.style.apply(style_inspection_matrix, variant=f_variant, check_dryer_max=check_dryer, axis=1).format(format_dict, na_rep="N/A"), 
+            use_container_width=True, hide_index=True
+        )
         
         overall_pass = True
         failed_points = []
