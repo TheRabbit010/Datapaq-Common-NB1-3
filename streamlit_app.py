@@ -32,7 +32,7 @@ GROUP_COLORS = {"Dryer": "rgba(255, 235, 156, 0.15)", "Debinder": "rgba(255, 199
 STANDARD_SPECS = {
     "NB1 (RAD)": {"id": "PRCNVR02044", "max": "Dryer: 175-260°C &nbsp;|&nbsp; Debinder: 200-375°C &nbsp;|&nbsp; Brazing: 583-607°C", "dwell": "Dryer ≥175°C ≥ 1.00 min &nbsp;|&nbsp; Debinder ≥200°C ≥ 2.00 min &nbsp;|&nbsp; Brazing ≥577°C = 2.30 - 7.00 min, ≥583°C ≥ 2.30 min"},
     "NB1 (CDS/KN9/12SHP)": {"id": "PRCNVR02004", "max": "Dryer: 200-350°C &nbsp;|&nbsp; Debinder: 300-375°C &nbsp;|&nbsp; Brazing: 585-607°C", "dwell": "Dryer ≥200°C ≥ 1.30 min &nbsp;|&nbsp; Debinder ≥300°C ≥ 2.30 min &nbsp;|&nbsp; Brazing ≥577°C = 4.00 - 7.45 min"},
-    "NB3 (KE8/M2/EVO)": {"id": "PRCNVR02059 (Evaporator M2)", "max": "Dryer: 200-375°C &nbsp;|&nbsp; Brazing: 595-606°C", "dwell": "Dryer ≥200°C ≥ 1.30 min &nbsp;|&nbsp; Brazing ≥550°C = 7.00 - 10.30 min, ≥577°C = 4.30 - 7.00 min, ≥591°C = 1.30 - 4.00 min"},
+    "NB3 (KE8/M2/EVO)": {"id": "PRCNVR02059 (Evaporator M2 ,EVO)", "max": "Dryer: 200-375°C &nbsp;|&nbsp; Brazing: M2 = 595-602°C , EVO = 598-606°C", "dwell": "Dryer ≥200°C ≥ 1.30 min &nbsp;|&nbsp; Brazing ≥550°C = 7.00 - 10.30 min, ≥577°C = 4.30 - 7.00 min, ≥591°C = 1.30 - 4.00 min"},
     "NB2 (Tahc/Utahc)": {"id": "PRCNVR02050", "max": "Dryer: 200-375°C &nbsp;|&nbsp; Brazing: 596-604°C", "dwell": "Dryer ≥250°C ≥ 1.00 min &nbsp;|&nbsp; Brazing ≥577°C = 4.00 - 7.00 min, ≥591°C = 1.30 - 4.30 min"},
     "NB3 (BTM)": {"id": "PRCNVR02033", "max": "Dryer: 300-375°C &nbsp;|&nbsp; Brazing: 595-608°C", "dwell": "Dryer ≥300°C ≥ 2.00 min &nbsp;|&nbsp; Brazing ≥577°C = 4.00 - 14.00 min, ≥591°C = 2.00 - 12.00 min, ≥600°C ≤ 8.00 min"}
 }
@@ -53,7 +53,8 @@ def style_inspection_matrix(row, variant, check_dryer_max=False):
         val = row[col]
         rule = rules.get(col)
         
-        if not check_dryer_max and "Dryer Max" in col:
+        # --- FIX REQ 3: Skip evaluate for both Dryer Max AND Dryer Dwell when unchecked ---
+        if not check_dryer_max and ("Dryer Max" in col or "Dryer Dwell" in col):
             rule = None
             
         is_fail = False
@@ -155,8 +156,8 @@ def parse_operator_and_metadata(comments_list):
     
     combined_clean_start = re.sub(r'^\s*CAlarm\s*', '', combined, flags=re.IGNORECASE)
     
-    # --- FIX REQ 2: Add DBLog to Operator Name extraction ---
-    m_op = re.search(r'^([A-Za-z/]+)\s+(?:Monthly|WK|date|product|validation|run|test|DBLog)', combined_clean_start, re.IGNORECASE)
+    # --- FIX REQ 2: Add 'disconnected' to regex to correctly extract names like Mongkhon ---
+    m_op = re.search(r'^([A-Za-z/]+)\s+(?:Monthly|WK|date|product|validation|run|test|DBLog|disconnected)', combined_clean_start, re.IGNORECASE)
     if m_op: op = m_op.group(1).strip()
     elif "Niwat" in combined_clean_start: op = "Niwat"
     elif "Sunisa" in combined_clean_start: op = "Sunisa"
@@ -164,9 +165,10 @@ def parse_operator_and_metadata(comments_list):
     chopped_comment = re.split(r'\b(Untitled|Entry Zone|VSTS Exit Dryer|Exit Dryer|0Hl|!@f|"onB|aaa\.\.\.|FFGCC|bbbRRR|LNNSQ|OD@)\b', combined_clean_start, flags=re.IGNORECASE)[0]
     clean_notes = chopped_comment
     
-    # --- FIX REQ 3: Remove Garbage Datapaq Logger Text ---
-    clean_notes = re.sub(r'DBLog\s+Cleared.*?VBUS\b', '', clean_notes, flags=re.IGNORECASE | re.DOTALL)
-    clean_notes = re.sub(r'DP2300\s+EFM32.*?(?:VBUS\b|\Z)', '', clean_notes, flags=re.IGNORECASE | re.DOTALL)
+    # --- FIX REQ 2: Robust Log Garbage Truncation (Removes USBnr, CPU Clock, etc.) ---
+    log_marker = re.search(r'\b(disconnected:|DBLog Cleared:|DP2300 EFM32|CommIn:LOGGER_|USB_NOTIFY_)', clean_notes, flags=re.IGNORECASE)
+    if log_marker:
+        clean_notes = clean_notes[:log_marker.start()].strip()
     
     for token in [op, "Datapaq", "VSTS", site, "CAlarm"]:
         if token != "N/A":
@@ -295,7 +297,6 @@ def process_paq_file(file_bytes, filename):
             ch_key = f"PB#{idx}"
             loc_desc = clean_probe_location(m.group(2).strip())
             
-            # --- FIX REQ 4: Filter out comment strings assigned incorrectly as Probe Locations ---
             if re.search(r'(validation|product|new bar|WK\d)', loc_desc, re.IGNORECASE) or len(loc_desc) > 40:
                 if loc_desc not in found_comments: found_comments.append(loc_desc)
                 continue
@@ -310,7 +311,6 @@ def process_paq_file(file_bytes, filename):
         while f"PB#{assigned_idx}" in probe_locations and assigned_idx <= 8: assigned_idx += 1
         if assigned_idx > 8: break
         
-        # Don't add garbage/comment text to unassigned probes
         if re.search(r'(validation|product|new bar)', p, re.IGNORECASE) or len(p) > 40:
              continue
              
@@ -466,8 +466,9 @@ else:
             desired_order = ["PB#1", "PB#2", "PB#3", "PB#8", "PB#4", "PB#5", "PB#6", "PB#7"]
             matrix_rows = sorted(matrix_rows, key=lambda x: desired_order.index(x["Probe"]) if x["Probe"] in desired_order else 99)
 
+        # --- FIX REQ 3: Updated checkbox text to reflect both Max & Dwell ---
         st.subheader(f"⏱️ Inspection Matrix — {f_variant}")
-        check_dryer_max = st.checkbox("🔍 ตรวจสอบเกณฑ์ Dryer Max Temp (°C) / Evaluate Dryer Max", value=False)
+        check_dryer = st.checkbox("🔍 ตรวจสอบเกณฑ์ Dryer Max Temp & Dwell Time / Evaluate Dryer Max & Dwell", value=False)
         
         std_info = STANDARD_SPECS.get(f_variant)
         if std_info:
@@ -489,7 +490,7 @@ else:
 
         df_matrix = pd.DataFrame(matrix_rows)
         format_dict = {col: "{:.1f}" for col in df_matrix.columns if "Max (°C)" in col}
-        st.dataframe(df_matrix.style.apply(style_inspection_matrix, variant=f_variant, check_dryer_max=check_dryer_max, axis=1).format(format_dict, na_rep="N/A"), use_container_width=True, hide_index=True)
+        st.dataframe(df_matrix.style.apply(style_inspection_matrix, variant=f_variant, check_dryer_max=check_dryer, axis=1).format(format_dict, na_rep="N/A"), use_container_width=True, hide_index=True)
         
         overall_pass = True
         failed_points = []
@@ -499,7 +500,9 @@ else:
             probe = r["Probe"]
             for k, v in r.items():
                 if k == "Probe": continue
-                if not check_dryer_max and "Dryer Max" in k: continue 
+                
+                # --- FIX REQ 3: Skip evaluate for both Dryer Max AND Dryer Dwell when unchecked ---
+                if not check_dryer and ("Dryer Max" in k or "Dryer Dwell" in k): continue 
                 
                 rule = val_rules.get(k)
                 if not rule: continue
