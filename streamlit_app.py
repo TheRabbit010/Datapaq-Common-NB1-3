@@ -139,8 +139,6 @@ def clean_paq_text(raw_text):
         p = re.sub(r'\b(Untitled|Entry Zone|XFER|WatCool|Exit curtain|AirCool|Exit Zone|Dryer#1|VSTS Exit Dryer|Exit Dryer|0Hl|!@f|"onB|aaa\.\.\.|FFGCC|bbbRRR|LNNSQ|OD@)\b', ' ', p, flags=re.IGNORECASE)
         
         if re.search(r'(.)\1{4,}', p) or re.search(r'[@^\$|~<>{}\[\]]{2,}', p) or re.search(r'^[0-9\W]+$', p): continue 
-        
-        # ปรับปรุง: ไม่ใช้ #\d+ เพื่อลบตัวเลขทั้งหมด แต่ให้ลบเฉพาะตัวเลขที่ยาวผิดปกติ
         p = re.sub(r'#[0-9]{3,}', '', p)
         p = re.sub(r'\s+', ' ', p).strip()
         if p and len(p) >= 3: cleaned_parts.append(p)
@@ -190,7 +188,6 @@ def parse_operator_and_metadata(comments_list):
             clean_notes = re.sub(rf'\b{re.escape(token)}\b', '', clean_notes, flags=re.IGNORECASE)
             
     extra_probes = []
-    # ดึงรายละเอียดโพรบที่ปนอยู่ในคอมเม้นต์ออกมา
     probe_start_match = re.search(r'\b(Probe\s*no\.?\s*[1-8]|PB#[1-8])\b', clean_notes, flags=re.IGNORECASE)
     if probe_start_match:
         probe_text = clean_notes[probe_start_match.start():]
@@ -276,7 +273,6 @@ def process_paq_file(file_bytes, filename):
 
     found_comments, found_recipes, found_probes = [], [], []
     for s in raw_texts:
-        # ปรับปรุง: เพิ่ม Temp Top, Temp Bot และตัดข้อความขยะก่อนเข้า found_recipes
         is_recipe = re.search(r'\b(O2\s*Exit|ppm|CV\s*speed|mm/min|N2\s*Flow|WJ\s*Flow|Top\s*Temp|Bot\s*temp|Temp\s*Top|Temp\s*Bot|SP1|SP2\s*==>|Braze[d]?\s*Temp|Brazed|Brazing|Hz)\b', s, re.IGNORECASE)
         if is_recipe:
             s_rec = re.split(r'\b[A-Za-z]:\\', s)[0]
@@ -284,11 +280,13 @@ def process_paq_file(file_bytes, filename):
             s_rec = re.sub(r'\b(?:CProcessFile|COven|CZone|CRecipe|CProduct|CAnalysisParameters|CToleranceCurve|CAlarmParametersDouble|CMaximumMinimumAnalysisParameters|CTimeAtMeasurementAnalysisParameters|CRiseFallAnalysisParameters|CSlopeAnalysisParameters|CPeakDifferenceAnalysisParameters|CAreaUnderCurveAnalysisParameters|CFurnaceSurveyAnalysisParameters)\b', '', s_rec).strip()
             s_rec = re.sub(r'^[>#;\.,\|]+', '', s_rec).strip()
             
-            # ล้างข้อความขยะที่เจอบ่อย
+            # --- อัปเดต 1: ทำความสะอาดข้อความขยะที่เกิดจาก Logger ---
+            s_rec = re.sub(r'cer<>Hz\}', '', s_rec, flags=re.IGNORECASE)
+            s_rec = re.sub(r'==\?mnojjo[^\s]+', '', s_rec, flags=re.IGNORECASE)
             s_rec = re.sub(r'(?i)hz@[0-9]+[{#]z@', '', s_rec).strip()
             s_rec = re.sub(r'[{#]z@', '', s_rec).strip()
+            # ---------------------------------------------------
             
-            # จัดรูปแบบการเว้นบรรทัด
             s_rec = re.sub(r'(WJ Flow)', r'\n\1', s_rec)
             s_rec = re.sub(r'(NB Top Temp)', r'\n\1', s_rec)
             s_rec = re.sub(r'(NB Bot temp)', r'\n\1', s_rec)
@@ -308,7 +306,6 @@ def process_paq_file(file_bytes, filename):
         is_probe = re.search(r'\b(cooler|drill&insert|inside H/D|manifold|core|PB#\d|Probe\s*no|Left\s*core|Right\s*core|Middle\s*core)\b', s_clean, re.IGNORECASE)
         is_note = re.search(r'\b(validation|product|new bar|WK\d|Loaded|Model|week\d|date\d|datapaq|spacer|gap|EVO|G100|Tahc)\b', s_clean, re.IGNORECASE)
         
-        # เพิ่มความยาวที่อนุญาตเพื่อไม่ให้ตัดชื่อโพรบยาวๆ
         if is_probe and not is_note and len(s_clean) < 80:
             if s_clean not in found_probes: found_probes.append(s_clean)
         else:
@@ -316,7 +313,6 @@ def process_paq_file(file_bytes, filename):
 
     operator_name, company, site, clean_comments_text, extra_probes = parse_operator_and_metadata(found_comments)
     
-    # กรองเอาข้อความที่ไม่ใช่โพรบออก (พวกชื่อโซน หรือค่าแปลกๆ)
     valid_probes = []
     for p in found_probes + extra_probes:
         if re.search(r'\b(DryOff|Xfer|Watcol|AirC|Exit curtain|AN h8|ljjSQP|xwTLL|ZY\+|nif jgni|Exit)\b', p, re.IGNORECASE):
@@ -326,16 +322,18 @@ def process_paq_file(file_bytes, filename):
     probe_locations = {}
     unassigned_probes = []
     
-    # ปรับปรุง: ค้นหา Index จากข้อความที่มี #1 ถึง #8 เพื่อให้จับคู่ได้ถูกต้อง
     for p in valid_probes:
         m = re.search(r'^(?:#|Probe\s*no\.?\s*|PB#)?([1-8])\s*[\(°C\)]*\s*[-:]?\s*(.+)', p, re.IGNORECASE)
         if m:
             idx = int(m.group(1))
-            ch_key = f"PB#{idx}"
-            loc_desc = clean_probe_location(m.group(2).strip())
-            label = f"#{idx} (°C) {loc_desc}"
-            if ch_key not in probe_locations or len(label) > len(probe_locations.get(ch_key, "")):
-                probe_locations[ch_key] = label
+            if 1 <= idx <= 8:
+                ch_key = f"PB#{idx}"
+                loc_desc = clean_probe_location(m.group(2).strip())
+                label = f"#{idx} (°C) {loc_desc}"
+                if ch_key not in probe_locations or len(label) > len(probe_locations.get(ch_key, "")):
+                    probe_locations[ch_key] = label
+            else:
+                unassigned_probes.append(p)
         else:
             unassigned_probes.append(p)
                 
@@ -365,6 +363,27 @@ def process_paq_file(file_bytes, filename):
     else:
         f_match = re.search(r'NB\s*Furnace\s*0?([123])\b|NB\s*#?\s*0?([123])\b|NB-0?([123])\b', recipe_corpus, re.IGNORECASE)
         if f_match: furnace_id = furnace_variant = f"NB{f_match.group(1)}"
+
+    # --- อัปเดต 2: บังคับจัดเรียงรายชื่อ Probe ให้ตรงกับตำแหน่งชิ้นงานจริง สำหรับเตา NB2 ---
+    if "NB2" in furnace_variant:
+        nb2_patterns = {
+            "PB#1": r"(Left\s*core\s*-\s*Bottom\s*left[^\.]*)",
+            "PB#2": r"(Left\s*core\s*-\s*Top\s*right[^\.]*)",
+            "PB#3": r"(Middle\s*left\s*core\s*-\s*Bottom\s*left[^\.]*)",
+            "PB#4": r"(Middle\s*left\s*core\s*-\s*Top\s*right[^\.]*)",
+            "PB#5": r"(Middle\s*right\s*core\s*-\s*Bottom\s*left[^\.]*)",
+            "PB#6": r"(Middle\s*right\s*core\s*-\s*Top\s*right[^\.]*)",
+            "PB#7": r"(Right\s*core\s*-\s*Bottom\s*left[^\.]*)",
+            "PB#8": r"(Right\s*core\s*-\s*Top\s*right[^\.]*)"
+        }
+        combined_text = " ".join(probe_locations.values()) + " " + " ".join(found_probes) + " " + clean_comments_text
+        for pb, pat in nb2_patterns.items():
+            match = re.search(pat, combined_text, re.IGNORECASE)
+            if match:
+                clean_str = clean_probe_location(match.group(1).strip())
+                clean_str = re.sub(r'\.$', '', clean_str)
+                probe_locations[pb] = f"#{pb.replace('PB#','')} (°C) {clean_str}"
+    # ----------------------------------------------------------------------
 
     base_cfg = FURNACE_CONFIGS.get(furnace_id, FURNACE_CONFIGS["NB3"])
     cfg = dict(base_cfg)
@@ -580,7 +599,7 @@ else:
             m2.text_input("Company", data1["company"], disabled=True)
             m3.text_input("Site", data1["site"], disabled=True)
             st.text_area("💬 Comments", data1["operator_comment"], height=120)
-            st.text_area("⚙️️ Recipe", data1["process_settings"], height=200)
+            st.text_area("⚙️ Recipe", data1["process_settings"], height=200)
 
         with col_b:
             st.subheader("📍 Probe Locations")
@@ -598,7 +617,7 @@ else:
                 st.image(data1["embedded_img"], use_container_width=True)
 
         st.markdown("---")
-        show_indiv_chart = st.toggle("👁️️ Show / Hide Individually Aligned Chart", value=False)
+        show_indiv_chart = st.toggle("👁️ Show / Hide Individually Aligned Chart", value=False)
         if show_indiv_chart:
             st.subheader("Individually Aligned Probe Chart (Own 60°C Entry)")
             fig2 = go.Figure()
@@ -633,7 +652,7 @@ else:
 
         st.markdown("---")
         st.subheader("⏱️ Entry Alignment (60°C)")
-        shift_rows = [{"Probe": col, "Start Time (HH:MM:SS)": info["Start_HHMMSS"], "Start Sec": f"{info['Start_Sec']}s", "Lag Time vs First": f"+{info['Offset_Sec']}s" if info['Offset_Sec'] > 0 else "0s (Lead)", "Distance Shift": f"+{info['Offset_Meters']:.2f} m" if info['Offset_Meters'] > 0 else "0.00 m (Lead)", "Status": "🏆 First (Lead)" if info["Is_First"] else f"+{info['Offset_Meters']:.2f} m lag"} for col, info in data1["probe_start_info"].itemsitems()]
+        shift_rows = [{"Probe": col, "Start Time (HH:MM:SS)": info["Start_HHMMSS"], "Start Sec": f"{info['Start_Sec']}s", "Lag Time vs First": f"+{info['Offset_Sec']}s" if info['Offset_Sec'] > 0 else "0s (Lead)", "Distance Shift": f"+{info['Offset_Meters']:.2f} m" if info['Offset_Meters'] > 0 else "0.00 m (Lead)", "Status": "🏆 First (Lead)" if info["Is_First"] else f"+{info['Offset_Meters']:.2f} m lag"} for col, info in data1["probe_start_info"].items()]
         st.dataframe(pd.DataFrame(shift_rows), use_container_width=True, hide_index=True)
 
     with tabs[2]:
