@@ -186,12 +186,20 @@ def parse_operator_and_metadata(comments_list):
     for token in [comp, site]:
         if token != "N/A":
             clean_notes = re.sub(rf'\b{re.escape(token)}\b', '', clean_notes, flags=re.IGNORECASE)
+            
+    # NEW: ดึงรายละเอียด Probe (เช่น Probe no.1 was loosen, 2Left core...) ออกจากช่อง Comments
+    extra_probes = []
+    probe_start_match = re.search(r'\b(Probe\s*no\.?\s*\d|PB#\d|\d\s*(?:Left|Right|Middle|Top|Bottom|Center)\s*core\b)', clean_notes, flags=re.IGNORECASE)
+    if probe_start_match:
+        probe_text = clean_notes[probe_start_match.start():]
+        clean_notes = clean_notes[:probe_start_match.start()].strip()
+        extra_probes = [p.strip() for p in re.split(r'\.\s+', probe_text) if p.strip()]
     
     clean_notes = re.sub(r'\s{2,}', ' ', clean_notes)
     clean_notes = re.sub(r'^[.,;\s]+', '', clean_notes)
     clean_notes = re.sub(r'[\.,\s]+$', '.', clean_notes).strip()
     
-    return op, comp, site, clean_notes if clean_notes else "N/A"
+    return op, comp, site, clean_notes if clean_notes else "N/A", extra_probes
 
 def clean_probe_location(loc_desc):
     loc_desc = re.sub(r'^[^A-Za-z]*(Top|Bottom|Middle|Left|Right|Core)', r'\1', loc_desc, flags=re.IGNORECASE)
@@ -291,9 +299,16 @@ def process_paq_file(file_bytes, filename):
         else:
             if s_clean not in found_comments: found_comments.append(s_clean)
 
+    # ดึงค่า metadata และ extra probes ออกมาเพิ่มไปรวมใน found_probes
+    operator_name, company, site, clean_comments_text, extra_probes = parse_operator_and_metadata(found_comments)
+    found_probes.extend(extra_probes)
+
     probe_locations = {}
+    unassigned_probes = []
+    
+    # อัปเดต: แยกการจับคู่ Probe Index เพื่อรองรับรูปแบบ Probe no.X หรือ XLeft core 
     for p in found_probes:
-        m = re.search(r'^#?([1-8])\s*[\(°C\)]*\s*[-:]?\s*(.+)', p)
+        m = re.search(r'^(?:#|Probe\s*no\.?\s*|PB#)?([0-9])\s*[\(°C\)]*\s*[-:]?\s*(.+)', p, re.IGNORECASE)
         if m:
             idx = int(m.group(1))
             ch_key = f"PB#{idx}"
@@ -302,8 +317,9 @@ def process_paq_file(file_bytes, filename):
             label = f"#{idx} (°C) {loc_desc}"
             if ch_key not in probe_locations or len(label) > len(probe_locations.get(ch_key, "")):
                 probe_locations[ch_key] = label
+        else:
+            unassigned_probes.append(p)
                 
-    unassigned_probes = [p for p in found_probes if not re.search(r'^#?[1-8]\s*[\(°C\)]', p)]
     assigned_idx = 1
     for p in unassigned_probes:
         while f"PB#{assigned_idx}" in probe_locations and assigned_idx <= 8: assigned_idx += 1
@@ -315,7 +331,6 @@ def process_paq_file(file_bytes, filename):
     for col in probe_cols:
         if col not in probe_locations: probe_locations[col] = f"Channel {col.replace('PB#', '')} (Unlabeled)"
 
-    operator_name, company, site, clean_comments_text = parse_operator_and_metadata(found_comments)
     process_settings = "\n".join(found_recipes) if found_recipes else "Standard Recipe Parameters"
     recipe_corpus = f"{process_settings} {clean_comments_text} {filename}"
 
@@ -433,10 +448,15 @@ else:
         debinder_info = next((s for s in stages if s["Stage"] == "Debinder"), None) if has_debinder else None
         brazing_info = next((s for s in stages if s["Stage"] == "Brazing"), stages[-1])
 
+        # อัปเดต: เพิ่มขอบเขตเวลาสำหรับ NB2 เพื่อจำกัด 270 วินาทีตามที่ผู้ใช้กำหนด (00:00:00 ถึง 00:04:30)
         if f_variant == "NB1 (RAD)":
             process_time = df_m1["Time_Seconds"] - data1["detected_start_sec"]
             dryer_df = df_m1[(process_time >= 0) & (process_time <= 300)]
             debinder_df = df_m1[(process_time > 300) & (process_time <= 930)]
+        elif "NB2" in f_variant:
+            process_time = df_m1["Time_Seconds"] - data1["detected_start_sec"]
+            dryer_df = df_m1[(process_time >= 0) & (process_time <= 270)]
+            debinder_df = None
         else:
             dryer_df = df_m1[(df_m1["Distance_Meters"] >= dryer_info["Start (m)"]) & (df_m1["Distance_Meters"] <= dryer_info["End (m)"])]
             debinder_df = df_m1[(df_m1["Distance_Meters"] >= debinder_info["Start (m)"]) & (df_m1["Distance_Meters"] <= debinder_info["End (m)"])] if debinder_info else None
@@ -648,7 +668,6 @@ else:
                 custom_hover1 = np.stack((df_m1["Time_HHMMSS"], df_m1["Time_Seconds"], df_m1["Distance_Meters"]), axis=-1)
                 custom_hover2 = np.stack((df_m2["Time_HHMMSS"], df_m2["Time_Seconds"], df_m2["Distance_Meters"]), axis=-1)
 
-                # อัปเดต: การสร้าง Background Zones โดยแปลงระยะทางให้อยู่ในรูปแบบแกน Time (อิงตามไฟล์ที่ 1)
                 for z in zones:
                     z_color = GROUP_COLORS.get(z["group"], "rgba(200, 200, 200, 0.2)")
                     z_start_sec = (z["start"] / data1['line_speed_mpm']) * 60
@@ -671,7 +690,6 @@ else:
                     annotation_position="bottom right"
                 )
                 
-                # อัปเดต: สลับให้แกน X ของเส้นกราฟเป็น Time_Stamp (hh:mm:ss) เหมือนหน้าต่างหลัก
                 for col in probe_cols:
                     if col in df_m1.columns: 
                         fig_comp.add_trace(go.Scatter(x=df_m1["Time_Stamp"], y=df_m1[col], mode="lines", name=f"F1: {col}", customdata=custom_hover1, hovertemplate="F1 %{fullData.name}: %{y:.1f} °C<br>Time: %{customdata[0]}<br>Dist: %{customdata[2]:.2f} m", line=dict(color=PROBE_COLORS.get(col), width=1.5), xaxis="x"))
@@ -679,7 +697,6 @@ else:
                     if col in df_m2.columns: 
                         fig_comp.add_trace(go.Scatter(x=df_m2["Time_Stamp"], y=df_m2[col], mode="lines", name=f"F2: {col}", customdata=custom_hover2, hovertemplate="F2 %{fullData.name}: %{y:.1f} °C<br>Time: %{customdata[0]}<br>Dist: %{customdata[2]:.2f} m", line=dict(dash='dash', color=PROBE_COLORS.get(col), width=1.5), xaxis="x"))
                 
-                # อัปเดต: ควบคุม Layout โดยให้แกน X หลักเป็น Time และแกน X รอง (ด้านล่าง) เป็น Distance
                 fig_comp.update_layout(
                     title=f"COMPARISON: {data1['filename']} vs {data2['filename']}", 
                     yaxis=dict(title="Temperature (°C)", domain=[0.15, 1.0]), 
@@ -691,7 +708,6 @@ else:
                     xaxis2=dict(title="Distance (Meters)", overlaying="x", side="bottom", position=0.0, anchor="free", range=[0, total_furnace_length + (120 * data1['line_speed_mpm'] / 60)])
                 )
                 
-                # สร้าง trace ว่างเปล่าสำหรับบังคับให้แกน xaxis2 (Distance) ทำงานคู่กัน
                 fig_comp.add_trace(go.Scatter(x=df_m1["Distance_Meters"], y=df_m1[probe_cols[0]] * 0, showlegend=False, opacity=0, xaxis="x2", hoverinfo='skip'))
                 
                 st.plotly_chart(fig_comp, use_container_width=True)
