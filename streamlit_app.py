@@ -136,7 +136,6 @@ def clean_paq_text(raw_text):
         p = re.sub(r'^[>#;\.,\|]+', '', p).strip() 
         if len(p) < 3: continue
         
-        # ปรับปรุง: ลบการใช้เงื่อนไข break ทิ้ง เพื่อไม่ให้ข้อความที่ควรจะเป็น Comments ถูกตัดจบกระทันหัน
         p = re.sub(r'\b(Untitled|Entry Zone|XFER|WatCool|Exit curtain|AirCool|Exit Zone|Dryer#1|VSTS Exit Dryer|Exit Dryer|0Hl|!@f|"onB|aaa\.\.\.|FFGCC|bbbRRR|LNNSQ|OD@)\b', ' ', p, flags=re.IGNORECASE)
         
         if re.search(r'(.)\1{4,}', p) or re.search(r'[@^\$|~<>{}\[\]]{2,}', p) or re.search(r'^[0-9\W]+$', p): continue 
@@ -160,7 +159,6 @@ def parse_operator_and_metadata(comments_list):
     elif re.search(r'\b(Niwat|Sunisa|Mongkhon)\b', clean_notes, re.IGNORECASE):
         op = re.search(r'\b(Niwat|Sunisa|Mongkhon)\b', clean_notes, re.IGNORECASE).group(1).strip()
 
-    # ลบส่วนประกอบ Log ขยะของระบบออก 
     log_marker = re.search(r'(disconnected:|DBLog Cleared:|DP2300|CommIn:LOGGER_|USB_NOTIFY_|TickRate|VBatt|\(USB_VALID\)|CommsIn\s+\d+|LoggerState_NewState:|trigger_search|DP\d{4}|Logger:|Battery:|Firmware:|Serial No:)', clean_notes, flags=re.IGNORECASE)
     if log_marker:
         clean_notes = clean_notes[:log_marker.start()].strip()
@@ -169,7 +167,6 @@ def parse_operator_and_metadata(comments_list):
         if token != "N/A":
             clean_notes = re.sub(rf'^\s*{re.escape(token)}\b\s*', '', clean_notes, flags=re.IGNORECASE)
 
-    # ปรับปรุง: ลบคำสั่ง split_match ที่ไปตัดประโยคเมื่อเจอคำว่า "core" หรือตำแหน่งอื่นๆ 
     clean_notes = re.sub(r'NB\s+with\s+Debinder\s+NB\s+Furnace\s+Total\s*;\s*[\d,]+\s*mm', '', clean_notes, flags=re.IGNORECASE)
     
     garbage_start = re.search(r'([A-Za-z]\\[A-Za-z]|[\$\#\^\~]{2,}|\?[A-Z]{2,}|[a-z]{2,}\~|\bKO\\|\b\d{1,2}:\d{1,2}[A-Z]+)', clean_notes)
@@ -183,9 +180,13 @@ def parse_operator_and_metadata(comments_list):
     clean_notes = re.sub(r'(?i)https?://[^\s]*', '', clean_notes)
     clean_notes = re.sub(r'(?i)\\\\[a-z0-9_]+\\[^\s]*', '', clean_notes)
     
-    # ปรับปรุง: เก็บตัวอักษรพิเศษ (+, =, :) ที่จำเป็นในบริบท Comments เอาไว้ 
     clean_notes = re.sub(r'[^\w\s\.\,\-\/\(\)\=\+:]', ' ', clean_notes)
     clean_notes = re.sub(r'\b[A-Z0-9]{15,}\b', '', clean_notes) 
+    
+    # NEW: ตัดข้อความ Company (VSTS) และ Site ออกจาก Comments เพื่อไม่ให้เกิดข้อมูลซ้ำซ้อน
+    for token in [comp, site]:
+        if token != "N/A":
+            clean_notes = re.sub(rf'\b{re.escape(token)}\b', '', clean_notes, flags=re.IGNORECASE)
     
     clean_notes = re.sub(r'\s{2,}', ' ', clean_notes)
     clean_notes = re.sub(r'^[.,;\s]+', '', clean_notes)
@@ -283,7 +284,6 @@ def process_paq_file(file_bytes, filename):
         s_clean = clean_paq_text(s)
         if not s_clean: continue
         
-        # ปรับปรุง: เพิ่มการดักจับข้อความที่เป็น Note จากผู้ใช้จริงๆ และให้สิทธิ์ในการแยกข้อความยาวๆ (>40 ตัวอักษร) ว่าเป็น Note ทันที
         is_probe = re.search(r'\b(cooler|drill&insert|inside H/D|manifold|core|PB#\d)\b', s_clean, re.IGNORECASE)
         is_note = re.search(r'\b(validation|product|new bar|WK\d|Loaded|Model|week\d|date\d|datapaq|spacer|gap|EVO|G100)\b', s_clean, re.IGNORECASE)
         
@@ -542,7 +542,7 @@ else:
             m2.text_input("Company", data1["company"], disabled=True)
             m3.text_input("Site", data1["site"], disabled=True)
             st.text_area("💬 Comments", data1["operator_comment"], height=120)
-            st.text_area("⚙️️ Recipe", data1["process_settings"], height=200)
+            st.text_area("⚙️ Recipe", data1["process_settings"], height=200)
 
         with col_b:
             st.subheader("📍 Probe Locations")
@@ -644,7 +644,6 @@ else:
                 df_m2 = data2["df_master"]
                 fig_comp = go.Figure()
                 
-                # --- การแสดงผล Background โซนเตาอบในกราฟเปรียบเทียบ ---
                 for z in zones:
                     z_color = GROUP_COLORS.get(z["group"], "rgba(200, 200, 200, 0.2)")
                     fig_comp.add_vrect(
@@ -656,7 +655,6 @@ else:
                         annotation=dict(font_size=9, font_color="#a0aab2", textangle=-90)
                     )
                 
-                # --- เส้นอ้างอิงอุณหภูมิ Brazing แนวนอน ---
                 fig_comp.add_hline(
                     y=cfg["trigger_temp_brazing"], line_dash="dash", line_color="red", 
                     annotation_text=f"Brazing ({cfg['trigger_temp_brazing']}°C)", 
