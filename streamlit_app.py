@@ -135,11 +135,11 @@ def clean_paq_text(raw_text):
     for p in parts:
         p = re.sub(r'^[>#;\.,\|]+', '', p).strip() 
         if len(p) < 3: continue
-        if re.search(r'\b(Untitled|Entry Zone|XFER|WatCool|Exit curtain|AirCool|Exit Zone|Dryer#1|VSTS Exit Dryer|Exit Dryer|0Hl|!@f|"onB|aaa\.\.\.|FFGCC|bbbRRR|LNNSQ|OD@)\b', p, re.IGNORECASE):
-            clean_segment = re.split(r'\b(Untitled|Entry Zone|XFER|WatCool|Exit curtain|AirCool|Exit Zone|Dryer#1|VSTS Exit Dryer|Exit Dryer|0Hl|!@f|"onB|aaa\.\.\.|FFGCC|bbbRRR|LNNSQ|OD@)\b', p, flags=re.IGNORECASE)[0]
-            if clean_segment.strip(): cleaned_parts.append(clean_segment.strip())
-            break 
-        if re.search(r'(.)\1{3,}', p) or re.search(r'[@^\$|~<>{}\[\]]{2,}', p) or re.search(r'^[0-9\W]+$', p): continue 
+        
+        # ปรับปรุง: ลบการใช้เงื่อนไข break ทิ้ง เพื่อไม่ให้ข้อความที่ควรจะเป็น Comments ถูกตัดจบกระทันหัน
+        p = re.sub(r'\b(Untitled|Entry Zone|XFER|WatCool|Exit curtain|AirCool|Exit Zone|Dryer#1|VSTS Exit Dryer|Exit Dryer|0Hl|!@f|"onB|aaa\.\.\.|FFGCC|bbbRRR|LNNSQ|OD@)\b', ' ', p, flags=re.IGNORECASE)
+        
+        if re.search(r'(.)\1{4,}', p) or re.search(r'[@^\$|~<>{}\[\]]{2,}', p) or re.search(r'^[0-9\W]+$', p): continue 
         p = re.sub(r'#\d+', '', p)
         p = re.sub(r'\s+', ' ', p).strip()
         if p and len(p) >= 3: cleaned_parts.append(p)
@@ -153,43 +153,39 @@ def parse_operator_and_metadata(comments_list):
     m_site = re.search(r'(Power\s+Chonburi|Chonburi|Plant\s+\d+|Factory\s+\d+)', combined, re.IGNORECASE)
     if m_site: site = m_site.group(1).strip()
     
-    combined_clean_start = re.sub(r'^\s*CAlarm\s*', '', combined, flags=re.IGNORECASE)
+    clean_notes = re.sub(r'^\s*CAlarm\s*', '', combined, flags=re.IGNORECASE)
     
-    m_op = re.search(r'^([A-Za-z/]+)\s+(?:Monthly|WK|date|product|validation|run|test|DBLog|disconnected|Power|Chonburi|Plant|Factory)', combined_clean_start, re.IGNORECASE)
+    m_op = re.search(r'^([A-Za-z/]+)\s+(?:Monthly|WK|date|product|validation|run|test|DBLog|disconnected|Power|Chonburi|Plant|Factory)', clean_notes, re.IGNORECASE)
     if m_op: op = m_op.group(1).strip()
-    elif re.search(r'\b(Niwat|Sunisa|Mongkhon)\b', combined_clean_start, re.IGNORECASE):
-        op = re.search(r'\b(Niwat|Sunisa|Mongkhon)\b', combined_clean_start, re.IGNORECASE).group(1).strip()
+    elif re.search(r'\b(Niwat|Sunisa|Mongkhon)\b', clean_notes, re.IGNORECASE):
+        op = re.search(r'\b(Niwat|Sunisa|Mongkhon)\b', clean_notes, re.IGNORECASE).group(1).strip()
 
-    chopped_comment = re.split(r'\b(Untitled|Entry Zone|VSTS Exit Dryer|Exit Dryer|0Hl|!@f|"onB|aaa\.\.\.|FFGCC|bbbRRR|LNNSQ|OD@)\b', combined_clean_start, flags=re.IGNORECASE)[0]
-    clean_notes = chopped_comment
-    
+    # ลบส่วนประกอบ Log ขยะของระบบออก 
     log_marker = re.search(r'(disconnected:|DBLog Cleared:|DP2300|CommIn:LOGGER_|USB_NOTIFY_|TickRate|VBatt|\(USB_VALID\)|CommsIn\s+\d+|LoggerState_NewState:|trigger_search|DP\d{4}|Logger:|Battery:|Firmware:|Serial No:)', clean_notes, flags=re.IGNORECASE)
     if log_marker:
         clean_notes = clean_notes[:log_marker.start()].strip()
     
-    # อัปเดต: ปรับให้ลบคำเฉพาะตอนที่อยู่ "ด้านหน้าสุด" เท่านั้น เพื่อป้องกันไม่ให้ไปลบข้อความในประโยค (เช่น Model before/after datapaq)
     for token in [op, "VSTS", site, "CAlarm"]:
         if token != "N/A":
             clean_notes = re.sub(rf'^\s*{re.escape(token)}\b\s*', '', clean_notes, flags=re.IGNORECASE)
 
-    split_match = re.search(r'(.*?)(?:\s+)?\b([A-Za-z]?Middle\s+left|[A-Za-z]?Middle\s+right|[A-Za-z]?Left\s+core|[A-Za-z]?Right\s+core|Bottom cooler|Top cooler)\b', clean_notes, flags=re.IGNORECASE)
-    if split_match: clean_notes = split_match.group(1).strip()
-    
+    # ปรับปรุง: ลบคำสั่ง split_match ที่ไปตัดประโยคเมื่อเจอคำว่า "core" หรือตำแหน่งอื่นๆ 
     clean_notes = re.sub(r'NB\s+with\s+Debinder\s+NB\s+Furnace\s+Total\s*;\s*[\d,]+\s*mm', '', clean_notes, flags=re.IGNORECASE)
-    clean_notes = re.sub(r'\b(Dryer Z|Air Cool|Exit Zone|EXT Dryer|ENT DB|DB Z)\b', '', clean_notes, flags=re.IGNORECASE)
     
     garbage_start = re.search(r'([A-Za-z]\\[A-Za-z]|[\$\#\^\~]{2,}|\?[A-Z]{2,}|[a-z]{2,}\~|\bKO\\|\b\d{1,2}:\d{1,2}[A-Z]+)', clean_notes)
     if garbage_start:
         clean_notes = clean_notes[:garbage_start.start()]
         
-    garbage_regex = r'(C:\\Program Files|IJ@1|a@FGr|YW@\.|dhmquz|QUZ|rx\s+knv|V\^e|ipyw~|MSYmqw~|AFMEKO|FIL257|CVersionInfo|1w-!|zfo@|8gDi|R@\?m|MQTDFI|HKN\*,|Double m\b|double m\b|C[A-Z][a-z]+[A-Za-z]+)'
+    garbage_regex = r'(C:\\Program Files|IJ@1|a@FGr|YW@\.|dhmquz|QUZ|rx\s+knv|V\^e|ipyw~|MSYmqw~|AFMEKO|FIL257|CVersionInfo|1w-!|zfo@|8gDi|R@\?m|MQTDFI|HKN\*,|Double m\b|double m\b)'
     clean_notes = re.split(garbage_regex, clean_notes, flags=re.IGNORECASE)[0]
     
     clean_notes = re.sub(r'(?i)\b[a-z]:\\[^\s]*', '', clean_notes)
     clean_notes = re.sub(r'(?i)https?://[^\s]*', '', clean_notes)
     clean_notes = re.sub(r'(?i)\\\\[a-z0-9_]+\\[^\s]*', '', clean_notes)
-    clean_notes = re.sub(r'[^\w\s\.\,\-\/\(\)\=\+]', ' ', clean_notes) # เพิ่ม = และ + เพื่อรองรับข้อความ Note
-    clean_notes = re.sub(r'\b[A-Z0-9]{10,}\b', '', clean_notes) 
+    
+    # ปรับปรุง: เก็บตัวอักษรพิเศษ (+, =, :) ที่จำเป็นในบริบท Comments เอาไว้ 
+    clean_notes = re.sub(r'[^\w\s\.\,\-\/\(\)\=\+:]', ' ', clean_notes)
+    clean_notes = re.sub(r'\b[A-Z0-9]{15,}\b', '', clean_notes) 
     
     clean_notes = re.sub(r'\s{2,}', ' ', clean_notes)
     clean_notes = re.sub(r'^[.,;\s]+', '', clean_notes)
@@ -287,10 +283,11 @@ def process_paq_file(file_bytes, filename):
         s_clean = clean_paq_text(s)
         if not s_clean: continue
         
+        # ปรับปรุง: เพิ่มการดักจับข้อความที่เป็น Note จากผู้ใช้จริงๆ และให้สิทธิ์ในการแยกข้อความยาวๆ (>40 ตัวอักษร) ว่าเป็น Note ทันที
         is_probe = re.search(r'\b(cooler|drill&insert|inside H/D|manifold|core|PB#\d)\b', s_clean, re.IGNORECASE)
-        is_note = re.search(r'\b(validation|product|new bar|WK\d|Loaded|Model|week\d|date\d)\b', s_clean, re.IGNORECASE)
+        is_note = re.search(r'\b(validation|product|new bar|WK\d|Loaded|Model|week\d|date\d|datapaq|spacer|gap|EVO|G100)\b', s_clean, re.IGNORECASE)
         
-        if is_probe and not is_note:
+        if is_probe and not is_note and len(s_clean) < 40:
             if s_clean not in found_probes: found_probes.append(s_clean)
         else:
             if s_clean not in found_comments: found_comments.append(s_clean)
@@ -545,7 +542,7 @@ else:
             m2.text_input("Company", data1["company"], disabled=True)
             m3.text_input("Site", data1["site"], disabled=True)
             st.text_area("💬 Comments", data1["operator_comment"], height=120)
-            st.text_area("⚙️ Recipe", data1["process_settings"], height=200)
+            st.text_area("⚙️️ Recipe", data1["process_settings"], height=200)
 
         with col_b:
             st.subheader("📍 Probe Locations")
@@ -647,7 +644,7 @@ else:
                 df_m2 = data2["df_master"]
                 fig_comp = go.Figure()
                 
-                # --- อัปเดต: เพิ่มการแสดงผล Background Zones แบบเดียวกันกับใน Global Profile ---
+                # --- การแสดงผล Background โซนเตาอบในกราฟเปรียบเทียบ ---
                 for z in zones:
                     z_color = GROUP_COLORS.get(z["group"], "rgba(200, 200, 200, 0.2)")
                     fig_comp.add_vrect(
@@ -659,7 +656,7 @@ else:
                         annotation=dict(font_size=9, font_color="#a0aab2", textangle=-90)
                     )
                 
-                # --- อัปเดต: เพิ่มเส้นอ้างอิงอุณหภูมิ Brazing แนวนอน ---
+                # --- เส้นอ้างอิงอุณหภูมิ Brazing แนวนอน ---
                 fig_comp.add_hline(
                     y=cfg["trigger_temp_brazing"], line_dash="dash", line_color="red", 
                     annotation_text=f"Brazing ({cfg['trigger_temp_brazing']}°C)", 
