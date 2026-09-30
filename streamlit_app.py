@@ -15,6 +15,7 @@ from PIL import Image
 # ==============================================================================
 st.set_page_config(page_title="Datapaq .PAQ Analyzer & Furnace Profiler", page_icon="🔥", layout="wide", initial_sidebar_state="expanded")
 
+# แก้ไขขนาดฟอนต์ Metric ให้เล็กลง เพื่อไม่ให้ Confirmed Furnace ถูกตัดคำ
 st.markdown("""
 <style>
 div[data-testid="stMetricValue"] { font-size: 1.8rem !important; font-weight: 700 !important; white-space: normal !important; line-height: 1.2 !important; }
@@ -163,18 +164,11 @@ def parse_operator_and_metadata(comments_list):
     chopped_comment = re.split(r'\b(Untitled|Entry Zone|VSTS Exit Dryer|Exit Dryer|0Hl|!@f|"onB|aaa\.\.\.|FFGCC|bbbRRR|LNNSQ|OD@)\b', combined_clean_start, flags=re.IGNORECASE)[0]
     clean_notes = chopped_comment
     
-    # --- ใช้ Regex เพื่อลบเฉพาะส่วนที่เป็น Log ของ Datapaq และเก็บ Note ผู้ใช้ไว้ ---
-    log_patterns = [
-        r'(DBLog Cleared:|disconnected:).*?(PwrChng\s*\d+|pass COUT to|Device is not configured\))',
-        r'DP2300\s+EFM32.*?(TickRate\s*=\s*\d+\s*Hz|VBatt\s*\d+\s*uV)',
-        r'Clock set:.*?(PwrChng\s*\d+|VBUS)',
-        r'CommIn:LOGGER_.*?(Comms:|CommsState\s*\d+)',
-        r'Received USB_NOTIFY_.*?(CommsState\s*\d+|isBT\s*\d+)',
-        r'RequsetCode\s*\d+\s*pass COUT to',
-        r'\b\d{2}:\d{2}:\d{2}\s+\d{2}/\d{2}/\d{4}\b' # ลบเวลาที่เป็น Time Stamp ลอยๆ
-    ]
-    for pattern in log_patterns:
-        clean_notes = re.sub(pattern, ' ', clean_notes, flags=re.IGNORECASE | re.DOTALL)
+    # --- ตัดข้อความ Log ทิ้งอย่างเด็ดขาดเพื่อไม่ให้มีข้อความขยะเหลืออยู่เลย ---
+    # เพิ่ม (USB_VALID), CommsIn, LoggerState, trigger_search เข้าไปในเงื่อนไขการตัดคำ
+    log_marker = re.search(r'(disconnected:|DBLog Cleared:|DP2300 EFM32|CommIn:LOGGER_|USB_NOTIFY_|TickRate|VBatt|\(USB_VALID\)|CommsIn\s+\d+|LoggerState_NewState:|trigger_search)', clean_notes, flags=re.IGNORECASE)
+    if log_marker:
+        clean_notes = clean_notes[:log_marker.start()].strip()
     
     for token in [op, "Datapaq", "VSTS", site, "CAlarm"]:
         if token != "N/A":
