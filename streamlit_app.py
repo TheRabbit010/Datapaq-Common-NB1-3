@@ -432,14 +432,6 @@ with st.sidebar:
         st.cache_data.clear()
         st.rerun()
     uploaded_file1 = st.file_uploader("Upload Main .PAQ File", type=["paq"], key="paq1")
-    st.markdown("---")
-    
-    # เพิ่ม Toggle สำหรับการเปรียบเทียบไฟล์
-    enable_comparison = st.toggle("⚖️ Compare Files")
-    uploaded_file2 = None
-    if enable_comparison:
-        st.header("⚖️ Comparison Option")
-        uploaded_file2 = st.file_uploader("Upload 2nd .PAQ File (Optional)", type=["paq"], key="paq2")
 
 if not uploaded_file1:
     st.info("👈 Please upload a `.paq` binary file using the sidebar to begin analysis.")
@@ -699,8 +691,10 @@ else:
 
     with tabs[4]:
         st.subheader("⚖️ Compare Profiles Across Two Files")
-        if not enable_comparison or not uploaded_file2: 
-            st.info("👈 Please enable 'Compare Files' in the sidebar and upload a second `.paq` file.")
+        uploaded_file2 = st.file_uploader("📂 Upload 2nd .PAQ File to Compare", type=["paq"], key="paq2")
+        
+        if not uploaded_file2: 
+            st.info("👆 Please upload a second `.paq` file above to view the comparison graph.")
         else:
             data2 = process_paq_file(uploaded_file2.getvalue(), uploaded_file2.name)
             if not data2: st.error("❌ Failed to parse second `.paq` file.")
