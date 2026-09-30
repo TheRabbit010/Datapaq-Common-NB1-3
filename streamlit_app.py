@@ -169,6 +169,13 @@ def parse_operator_and_metadata(comments_list):
 
     clean_notes = re.sub(r'NB\s+with\s+Debinder\s+NB\s+Furnace\s+Total\s*;\s*[\d,]+\s*mm', '', clean_notes, flags=re.IGNORECASE)
     
+    # --- อัปเดต 1: ตัดข้อความขยะที่ต่อท้ายยาวๆ ในช่อง Comments ออก (เช่น NB 2 DryOff-Z 1, AN h8...) ---
+    chop_pattern = r'\b(NB\s*\d\s*DryOff|DryOff-Z|Xfer2\s*Watcol|Watcol1|AN\s*h8|ljjSQP|xwTLL)\b'
+    split_notes = re.split(chop_pattern, clean_notes, flags=re.IGNORECASE)
+    if len(split_notes) > 1:
+        clean_notes = split_notes[0].strip()
+    # --------------------------------------------------------------------------------------
+    
     garbage_start = re.search(r'([A-Za-z]\\[A-Za-z]|[\$\#\^\~]{2,}|\?[A-Z]{2,}|[a-z]{2,}\~|\bKO\\|\b\d{1,2}:\d{1,2}[A-Z]+)', clean_notes)
     if garbage_start:
         clean_notes = clean_notes[:garbage_start.start()]
@@ -280,12 +287,10 @@ def process_paq_file(file_bytes, filename):
             s_rec = re.sub(r'\b(?:CProcessFile|COven|CZone|CRecipe|CProduct|CAnalysisParameters|CToleranceCurve|CAlarmParametersDouble|CMaximumMinimumAnalysisParameters|CTimeAtMeasurementAnalysisParameters|CRiseFallAnalysisParameters|CSlopeAnalysisParameters|CPeakDifferenceAnalysisParameters|CAreaUnderCurveAnalysisParameters|CFurnaceSurveyAnalysisParameters)\b', '', s_rec).strip()
             s_rec = re.sub(r'^[>#;\.,\|]+', '', s_rec).strip()
             
-            # --- อัปเดต 1: ทำความสะอาดข้อความขยะที่เกิดจาก Logger ---
-            s_rec = re.sub(r'cer<>Hz\}', '', s_rec, flags=re.IGNORECASE)
-            s_rec = re.sub(r'==\?mnojjo[^\s]+', '', s_rec, flags=re.IGNORECASE)
-            s_rec = re.sub(r'(?i)hz@[0-9]+[{#]z@', '', s_rec).strip()
-            s_rec = re.sub(r'[{#]z@', '', s_rec).strip()
-            # ---------------------------------------------------
+            # --- อัปเดต 2: ล้างข้อความขยะ hz@... ให้ครอบคลุมอักขระพิเศษ ---
+            s_rec = re.sub(r'(?i)hz@[a-z0-9\^\[\]\{\}\#\@\_\-\+V]+', '', s_rec).strip()
+            s_rec = re.sub(r'^[^a-zA-Z0-9]+', '', s_rec).strip() # ลบสัญลักษณ์ตกค้างที่ขึ้นต้นบรรทัด
+            # --------------------------------------------------------
             
             s_rec = re.sub(r'(WJ Flow)', r'\n\1', s_rec)
             s_rec = re.sub(r'(NB Top Temp)', r'\n\1', s_rec)
@@ -364,7 +369,6 @@ def process_paq_file(file_bytes, filename):
         f_match = re.search(r'NB\s*Furnace\s*0?([123])\b|NB\s*#?\s*0?([123])\b|NB-0?([123])\b', recipe_corpus, re.IGNORECASE)
         if f_match: furnace_id = furnace_variant = f"NB{f_match.group(1)}"
 
-    # --- อัปเดต 2: บังคับจัดเรียงรายชื่อ Probe ให้ตรงกับตำแหน่งชิ้นงานจริง สำหรับเตา NB2 ---
     if "NB2" in furnace_variant:
         nb2_patterns = {
             "PB#1": r"(Left\s*core\s*-\s*Bottom\s*left[^\.]*)",
@@ -383,7 +387,6 @@ def process_paq_file(file_bytes, filename):
                 clean_str = clean_probe_location(match.group(1).strip())
                 clean_str = re.sub(r'\.$', '', clean_str)
                 probe_locations[pb] = f"#{pb.replace('PB#','')} (°C) {clean_str}"
-    # ----------------------------------------------------------------------
 
     base_cfg = FURNACE_CONFIGS.get(furnace_id, FURNACE_CONFIGS["NB3"])
     cfg = dict(base_cfg)
