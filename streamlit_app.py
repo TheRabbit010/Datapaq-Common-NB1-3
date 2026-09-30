@@ -187,7 +187,6 @@ def parse_operator_and_metadata(comments_list):
         if token != "N/A":
             clean_notes = re.sub(rf'\b{re.escape(token)}\b', '', clean_notes, flags=re.IGNORECASE)
             
-    # NEW: ดึงรายละเอียด Probe (เช่น Probe no.1 was loosen, 2Left core...) ออกจากช่อง Comments
     extra_probes = []
     probe_start_match = re.search(r'\b(Probe\s*no\.?\s*\d|PB#\d|\d\s*(?:Left|Right|Middle|Top|Bottom|Center)\s*core\b)', clean_notes, flags=re.IGNORECASE)
     if probe_start_match:
@@ -274,7 +273,7 @@ def process_paq_file(file_bytes, filename):
 
     found_comments, found_recipes, found_probes = [], [], []
     for s in raw_texts:
-        is_recipe = re.search(r'\b(O2 Exit|ppm|CV speed|mm/min|N2 Flow|WJ Flow|Top Temp|Bot temp|SP1|SP2\s*==>|Braze Temp)\b', s, re.IGNORECASE)
+        is_recipe = re.search(r'\b(O2\s*Exit|ppm|CV\s*speed|mm/min|N2\s*Flow|WJ\s*Flow|Top\s*Temp|Bot\s*temp|SP1|SP2\s*==>|Braze[d]?\s*Temp|Brazed|Brazing|Hz)\b', s, re.IGNORECASE)
         if is_recipe:
             s_rec = re.split(r'\b[A-Za-z]:\\', s)[0]
             s_rec = re.split(r'\bdouble m\b', s_rec, flags=re.IGNORECASE)[0]
@@ -284,6 +283,8 @@ def process_paq_file(file_bytes, filename):
             s_rec = re.sub(r'(NB Top Temp)', r'\n\1', s_rec)
             s_rec = re.sub(r'(NB Bot temp)', r'\n\1', s_rec)
             s_rec = re.sub(r'(Braze Temp)', r'\n\1', s_rec)
+            s_rec = re.sub(r'(Brazed temp)', r'\n\1', s_rec, flags=re.IGNORECASE)
+            s_rec = re.sub(r'(Brazing temp)', r'\n\1', s_rec, flags=re.IGNORECASE)
             if s_rec and s_rec not in found_recipes: found_recipes.append(s_rec)
             continue
         
@@ -291,32 +292,37 @@ def process_paq_file(file_bytes, filename):
         s_clean = clean_paq_text(s)
         if not s_clean: continue
         
-        is_probe = re.search(r'\b(cooler|drill&insert|inside H/D|manifold|core|PB#\d)\b', s_clean, re.IGNORECASE)
-        is_note = re.search(r'\b(validation|product|new bar|WK\d|Loaded|Model|week\d|date\d|datapaq|spacer|gap|EVO|G100)\b', s_clean, re.IGNORECASE)
+        is_probe = re.search(r'\b(cooler|drill&insert|inside H/D|manifold|core|PB#\d|Probe\s*no)\b', s_clean, re.IGNORECASE)
+        is_note = re.search(r'\b(validation|product|new bar|WK\d|Loaded|Model|week\d|date\d|datapaq|spacer|gap|EVO|G100|Tahc)\b', s_clean, re.IGNORECASE)
         
         if is_probe and not is_note and len(s_clean) < 40:
             if s_clean not in found_probes: found_probes.append(s_clean)
         else:
             if s_clean not in found_comments: found_comments.append(s_clean)
 
-    # ดึงค่า metadata และ extra probes ออกมาเพิ่มไปรวมใน found_probes
     operator_name, company, site, clean_comments_text, extra_probes = parse_operator_and_metadata(found_comments)
-    found_probes.extend(extra_probes)
+    
+    valid_probes = []
+    for p in found_probes + extra_probes:
+        if re.search(r'\b(DryOff|Xfer1|Xfer2|Watcol|AirC|Exit curtain|AN h8|ljjSQP|xwTLL)\b', p, re.IGNORECASE):
+            continue
+        valid_probes.append(p)
 
     probe_locations = {}
     unassigned_probes = []
     
-    # อัปเดต: แยกการจับคู่ Probe Index เพื่อรองรับรูปแบบ Probe no.X หรือ XLeft core 
-    for p in found_probes:
+    for p in valid_probes:
         m = re.search(r'^(?:#|Probe\s*no\.?\s*|PB#)?([0-9])\s*[\(°C\)]*\s*[-:]?\s*(.+)', p, re.IGNORECASE)
         if m:
             idx = int(m.group(1))
-            ch_key = f"PB#{idx}"
-            loc_desc = clean_probe_location(m.group(2).strip())
-            
-            label = f"#{idx} (°C) {loc_desc}"
-            if ch_key not in probe_locations or len(label) > len(probe_locations.get(ch_key, "")):
-                probe_locations[ch_key] = label
+            if 1 <= idx <= 8:
+                ch_key = f"PB#{idx}"
+                loc_desc = clean_probe_location(m.group(2).strip())
+                label = f"#{idx} (°C) {loc_desc}"
+                if ch_key not in probe_locations or len(label) > len(probe_locations.get(ch_key, "")):
+                    probe_locations[ch_key] = label
+            else:
+                unassigned_probes.append(p)
         else:
             unassigned_probes.append(p)
                 
@@ -324,8 +330,9 @@ def process_paq_file(file_bytes, filename):
     for p in unassigned_probes:
         while f"PB#{assigned_idx}" in probe_locations and assigned_idx <= 8: assigned_idx += 1
         if assigned_idx > 8: break
-              
-        probe_locations[f"PB#{assigned_idx}"] = f"#{assigned_idx} (°C) {clean_probe_location(p)}"
+        
+        clean_p = re.sub(r'^[0-9]+\s*', '', p)
+        probe_locations[f"PB#{assigned_idx}"] = f"#{assigned_idx} (°C) {clean_probe_location(clean_p.strip())}"
         assigned_idx += 1
         
     for col in probe_cols:
@@ -448,7 +455,6 @@ else:
         debinder_info = next((s for s in stages if s["Stage"] == "Debinder"), None) if has_debinder else None
         brazing_info = next((s for s in stages if s["Stage"] == "Brazing"), stages[-1])
 
-        # อัปเดต: เพิ่มขอบเขตเวลาสำหรับ NB2 เพื่อจำกัด 270 วินาทีตามที่ผู้ใช้กำหนด (00:00:00 ถึง 00:04:30)
         if f_variant == "NB1 (RAD)":
             process_time = df_m1["Time_Seconds"] - data1["detected_start_sec"]
             dryer_df = df_m1[(process_time >= 0) & (process_time <= 300)]
