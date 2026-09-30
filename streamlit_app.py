@@ -183,7 +183,6 @@ def parse_operator_and_metadata(comments_list):
     clean_notes = re.sub(r'[^\w\s\.\,\-\/\(\)\=\+:]', ' ', clean_notes)
     clean_notes = re.sub(r'\b[A-Z0-9]{15,}\b', '', clean_notes) 
     
-    # NEW: ตัดข้อความ Company (VSTS) และ Site ออกจาก Comments เพื่อไม่ให้เกิดข้อมูลซ้ำซ้อน
     for token in [comp, site]:
         if token != "N/A":
             clean_notes = re.sub(rf'\b{re.escape(token)}\b', '', clean_notes, flags=re.IGNORECASE)
@@ -644,10 +643,21 @@ else:
                 df_m2 = data2["df_master"]
                 fig_comp = go.Figure()
                 
+                # Setup custom hover templates
+                end_time_stamp = pd.Timestamp("1970-01-01 00:00:00") + pd.to_timedelta(furnace_duration_secs + 120, unit="s")
+                custom_hover1 = np.stack((df_m1["Time_HHMMSS"], df_m1["Time_Seconds"], df_m1["Distance_Meters"]), axis=-1)
+                custom_hover2 = np.stack((df_m2["Time_HHMMSS"], df_m2["Time_Seconds"], df_m2["Distance_Meters"]), axis=-1)
+
+                # อัปเดต: การสร้าง Background Zones โดยแปลงระยะทางให้อยู่ในรูปแบบแกน Time (อิงตามไฟล์ที่ 1)
                 for z in zones:
                     z_color = GROUP_COLORS.get(z["group"], "rgba(200, 200, 200, 0.2)")
+                    z_start_sec = (z["start"] / data1['line_speed_mpm']) * 60
+                    z_end_sec = ((z["start"] + z["length"]) / data1['line_speed_mpm']) * 60
+                    z_start_time = pd.Timestamp("1970-01-01 00:00:00") + pd.to_timedelta(z_start_sec, unit="s")
+                    z_end_time = pd.Timestamp("1970-01-01 00:00:00") + pd.to_timedelta(z_end_sec, unit="s")
+                    
                     fig_comp.add_vrect(
-                        x0=z["start"], x1=z["start"] + z["length"], 
+                        x0=z_start_time, x1=z_end_time, 
                         fillcolor=z_color, layer="below", line_width=0.5, 
                         line_dash="dot", line_color="rgba(120, 120, 120, 0.4)", 
                         annotation_text=f"{z['num']}.{z['name']}", 
@@ -661,10 +671,27 @@ else:
                     annotation_position="bottom right"
                 )
                 
+                # อัปเดต: สลับให้แกน X ของเส้นกราฟเป็น Time_Stamp (hh:mm:ss) เหมือนหน้าต่างหลัก
                 for col in probe_cols:
-                    if col in df_m1.columns: fig_comp.add_trace(go.Scatter(x=df_m1["Distance_Meters"], y=df_m1[col], mode="lines", name=f"F1: {col}", line=dict(color=PROBE_COLORS.get(col), width=1.5)))
+                    if col in df_m1.columns: 
+                        fig_comp.add_trace(go.Scatter(x=df_m1["Time_Stamp"], y=df_m1[col], mode="lines", name=f"F1: {col}", customdata=custom_hover1, hovertemplate="F1 %{fullData.name}: %{y:.1f} °C<br>Time: %{customdata[0]}<br>Dist: %{customdata[2]:.2f} m", line=dict(color=PROBE_COLORS.get(col), width=1.5), xaxis="x"))
                 for col in data2["probe_cols"]:
-                    if col in df_m2.columns: fig_comp.add_trace(go.Scatter(x=df_m2["Distance_Meters"], y=df_m2[col], mode="lines", name=f"F2: {col}", line=dict(dash='dash', color=PROBE_COLORS.get(col), width=1.5)))
+                    if col in df_m2.columns: 
+                        fig_comp.add_trace(go.Scatter(x=df_m2["Time_Stamp"], y=df_m2[col], mode="lines", name=f"F2: {col}", customdata=custom_hover2, hovertemplate="F2 %{fullData.name}: %{y:.1f} °C<br>Time: %{customdata[0]}<br>Dist: %{customdata[2]:.2f} m", line=dict(dash='dash', color=PROBE_COLORS.get(col), width=1.5), xaxis="x"))
                 
-                fig_comp.update_layout(title=f"COMPARISON: {data1['filename']} vs {data2['filename']}", xaxis=dict(title="Distance (Meters)", range=[-1, total_furnace_length + 2]), yaxis_title="Temperature (°C)", hovermode="x unified", template="plotly_white", height=600)
+                # อัปเดต: ควบคุม Layout โดยให้แกน X หลักเป็น Time และแกน X รอง (ด้านล่าง) เป็น Distance
+                fig_comp.update_layout(
+                    title=f"COMPARISON: {data1['filename']} vs {data2['filename']}", 
+                    yaxis=dict(title="Temperature (°C)", domain=[0.15, 1.0]), 
+                    hovermode="x unified", 
+                    template="plotly_white", 
+                    height=600,
+                    margin=dict(b=80),
+                    xaxis=dict(title="Time (hh:mm:ss)", tickformat="%H:%M:%S", range=[pd.Timestamp("1970-01-01 00:00:00"), end_time_stamp], anchor="y"),
+                    xaxis2=dict(title="Distance (Meters)", overlaying="x", side="bottom", position=0.0, anchor="free", range=[0, total_furnace_length + (120 * data1['line_speed_mpm'] / 60)])
+                )
+                
+                # สร้าง trace ว่างเปล่าสำหรับบังคับให้แกน xaxis2 (Distance) ทำงานคู่กัน
+                fig_comp.add_trace(go.Scatter(x=df_m1["Distance_Meters"], y=df_m1[probe_cols[0]] * 0, showlegend=False, opacity=0, xaxis="x2", hoverinfo='skip'))
+                
                 st.plotly_chart(fig_comp, use_container_width=True)
