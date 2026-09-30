@@ -169,12 +169,10 @@ def parse_operator_and_metadata(comments_list):
 
     clean_notes = re.sub(r'NB\s+with\s+Debinder\s+NB\s+Furnace\s+Total\s*;\s*[\d,]+\s*mm', '', clean_notes, flags=re.IGNORECASE)
     
-    # --- อัปเดต 1: ตัดข้อความขยะที่ต่อท้ายยาวๆ ในช่อง Comments ออก (เช่น NB 2 DryOff-Z 1, AN h8...) ---
     chop_pattern = r'\b(NB\s*\d\s*DryOff|DryOff-Z|Xfer2\s*Watcol|Watcol1|AN\s*h8|ljjSQP|xwTLL)\b'
     split_notes = re.split(chop_pattern, clean_notes, flags=re.IGNORECASE)
     if len(split_notes) > 1:
         clean_notes = split_notes[0].strip()
-    # --------------------------------------------------------------------------------------
     
     garbage_start = re.search(r'([A-Za-z]\\[A-Za-z]|[\$\#\^\~]{2,}|\?[A-Z]{2,}|[a-z]{2,}\~|\bKO\\|\b\d{1,2}:\d{1,2}[A-Z]+)', clean_notes)
     if garbage_start:
@@ -287,10 +285,10 @@ def process_paq_file(file_bytes, filename):
             s_rec = re.sub(r'\b(?:CProcessFile|COven|CZone|CRecipe|CProduct|CAnalysisParameters|CToleranceCurve|CAlarmParametersDouble|CMaximumMinimumAnalysisParameters|CTimeAtMeasurementAnalysisParameters|CRiseFallAnalysisParameters|CSlopeAnalysisParameters|CPeakDifferenceAnalysisParameters|CAreaUnderCurveAnalysisParameters|CFurnaceSurveyAnalysisParameters)\b', '', s_rec).strip()
             s_rec = re.sub(r'^[>#;\.,\|]+', '', s_rec).strip()
             
-            # --- อัปเดต 2: ล้างข้อความขยะ hz@... ให้ครอบคลุมอักขระพิเศษ ---
+            s_rec = re.sub(r'cer<>Hz\}', '', s_rec, flags=re.IGNORECASE)
+            s_rec = re.sub(r'==\?mnojjo[^\s]+', '', s_rec, flags=re.IGNORECASE)
             s_rec = re.sub(r'(?i)hz@[a-z0-9\^\[\]\{\}\#\@\_\-\+V]+', '', s_rec).strip()
-            s_rec = re.sub(r'^[^a-zA-Z0-9]+', '', s_rec).strip() # ลบสัญลักษณ์ตกค้างที่ขึ้นต้นบรรทัด
-            # --------------------------------------------------------
+            s_rec = re.sub(r'^[^a-zA-Z0-9]+', '', s_rec).strip()
             
             s_rec = re.sub(r'(WJ Flow)', r'\n\1', s_rec)
             s_rec = re.sub(r'(NB Top Temp)', r'\n\1', s_rec)
@@ -435,8 +433,13 @@ with st.sidebar:
         st.rerun()
     uploaded_file1 = st.file_uploader("Upload Main .PAQ File", type=["paq"], key="paq1")
     st.markdown("---")
-    st.header("⚖️ Comparison Option")
-    uploaded_file2 = st.file_uploader("Upload 2nd .PAQ File (Optional)", type=["paq"], key="paq2")
+    
+    # เพิ่ม Toggle สำหรับการเปรียบเทียบไฟล์
+    enable_comparison = st.toggle("⚖️ Compare Files")
+    uploaded_file2 = None
+    if enable_comparison:
+        st.header("⚖️ Comparison Option")
+        uploaded_file2 = st.file_uploader("Upload 2nd .PAQ File (Optional)", type=["paq"], key="paq2")
 
 if not uploaded_file1:
     st.info("👈 Please upload a `.paq` binary file using the sidebar to begin analysis.")
@@ -696,7 +699,8 @@ else:
 
     with tabs[4]:
         st.subheader("⚖️ Compare Profiles Across Two Files")
-        if not uploaded_file2: st.info("👈 Upload a second `.paq` file in the sidebar to view comparison graph.")
+        if not enable_comparison or not uploaded_file2: 
+            st.info("👈 Please enable 'Compare Files' in the sidebar and upload a second `.paq` file.")
         else:
             data2 = process_paq_file(uploaded_file2.getvalue(), uploaded_file2.name)
             if not data2: st.error("❌ Failed to parse second `.paq` file.")
