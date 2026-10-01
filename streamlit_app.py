@@ -135,9 +135,7 @@ def clean_paq_text(raw_text):
     for p in parts:
         p = re.sub(r'^[>#;\.,\|]+', '', p).strip() 
         if len(p) < 3: continue
-        
         p = re.sub(r'\b(Untitled|Entry Zone|XFER|WatCool|Exit curtain|AirCool|Exit Zone|Dryer#1|VSTS Exit Dryer|Exit Dryer|0Hl|!@f|"onB|aaa\.\.\.|FFGCC|bbbRRR|LNNSQ|OD@)\b', ' ', p, flags=re.IGNORECASE)
-        
         if re.search(r'(.)\1{4,}', p) or re.search(r'[@^\$|~<>{}\[\]]{2,}', p) or re.search(r'^[0-9\W]+$', p): continue 
         p = re.sub(r'#[0-9]{3,}', '', p)
         p = re.sub(r'\s+', ' ', p).strip()
@@ -204,10 +202,6 @@ def parse_operator_and_metadata(comments_list):
     clean_notes = re.sub(r'[\.,\s]+$', '.', clean_notes).strip()
     
     return op, comp, site, clean_notes if clean_notes else "N/A", extra_probes
-
-def clean_probe_location(loc_desc):
-    loc_desc = re.sub(r'^[^A-Za-z]*(Top|Bottom|Middle|Left|Right|Core)', r'\1', loc_desc, flags=re.IGNORECASE)
-    return re.sub(r'\b[A-Z](Left|Right|Middle|Bottom|Top)\b', r'\1', loc_desc, flags=re.IGNORECASE)
 
 @st.cache_data
 def process_paq_file(file_bytes, filename):
@@ -278,7 +272,7 @@ def process_paq_file(file_bytes, filename):
 
     found_comments, found_recipes, found_probes = [], [], []
     for s in raw_texts:
-        # 1. ค้นหาส่วนที่เป็น Recipe ปรับ Regex ให้ดึงข้อมูลอุณหภูมิ Top/Bot มาได้ครบ
+        # 1. ค้นหาส่วนที่เป็น Recipe ปรับ Regex ให้ครอบคลุมอุณหภูมิ Top/Bot
         is_recipe = re.search(r'(During\s*datapaq|O2\s*Exit|CV\s*speed|mm/min|N2\s*Flow|WJ\s*Flow|Top\s*Temp|Bot\s*temp|Temp\s*Top|Temp\s*Bot|SP1|SP2|Braze[d]?\s*Temp|Brazed|Brazing|\bTop\s*:|\bBot\s*:)', s, re.IGNORECASE)
         if is_recipe:
             s_rec = re.split(r'\b[A-Za-z]:\\', s)[0]
@@ -311,16 +305,13 @@ def process_paq_file(file_bytes, filename):
     
     raw_notes = " ".join(found_comments)
     
-    # ลบข้อความระบบของ Datapaq ออกให้หมด
     raw_notes = re.sub(r'(disconnected:|DBLog Cleared:|DP2300|CommIn:LOGGER_.*?)(?=\s|$)', '', raw_notes, flags=re.IGNORECASE)
     raw_notes = re.sub(r'\b(CAlarm\w*|CVersionInfo|CProbe\w*|CFurnace\w*)\b', '', raw_notes, flags=re.IGNORECASE)
     
-    # ลบชื่อ Operator/Site 
     for token in [operator_name, site, company]:
         if token and token != "N/A":
             raw_notes = re.sub(rf'\b{re.escape(token)}\b', '', raw_notes, flags=re.IGNORECASE)
 
-    # กรองข้อความขยะออก และจับเฉพาะเนื้อหาที่เป็น Note จริงๆ เช่น Monthly product validation, WK, Date, +DNGA ฯลฯ
     note_match = re.search(r'(#\s*Note\s*[:\-]?\s*|Monthly\s*product|WK\d+|\+DNGA|For\s*product)(.*)', raw_notes, flags=re.IGNORECASE)
     if note_match:
         if "#" in note_match.group(1):
@@ -328,7 +319,6 @@ def process_paq_file(file_bytes, filename):
         else:
             raw_notes = note_match.group(1) + note_match.group(2)
     else:
-        # ตัดตัวอักษรขยะที่ขึ้นต้นออก
         raw_notes = re.sub(r'^[^a-zA-Z0-9\+]+', '', raw_notes)
 
     raw_notes = re.sub(r'\s{2,}', ' ', raw_notes).strip()
@@ -350,7 +340,7 @@ def process_paq_file(file_bytes, filename):
             idx = int(m.group(1))
             if 1 <= idx <= 8:
                 ch_key = f"PB#{idx}"
-                loc_desc = clean_probe_location(m.group(2).strip())
+                loc_desc = m.group(2).strip()
                 label = f"#{idx} (°C) {loc_desc}"
                 if ch_key not in probe_locations or len(label) > len(probe_locations.get(ch_key, "")):
                     probe_locations[ch_key] = label
@@ -364,8 +354,8 @@ def process_paq_file(file_bytes, filename):
         while f"PB#{assigned_idx}" in probe_locations and assigned_idx <= 8: assigned_idx += 1
         if assigned_idx > 8: break
         
-        clean_p = re.sub(r'^[0-9]+\s*', '', p)
-        probe_locations[f"PB#{assigned_idx}"] = f"#{assigned_idx} (°C) {clean_probe_location(clean_p.strip())}"
+        clean_p = re.sub(r'^(?:#\d+\s*|\d+\s+)', '', p)
+        probe_locations[f"PB#{assigned_idx}"] = f"#{assigned_idx} (°C) {clean_p.strip()}"
         assigned_idx += 1
         
     for col in probe_cols:
@@ -417,7 +407,7 @@ def process_paq_file(file_bytes, filename):
         for pb, pat in nb2_patterns.items():
             match = re.search(pat, combined_text, re.IGNORECASE)
             if match:
-                clean_str = clean_probe_location(match.group(1).strip())
+                clean_str = match.group(1).strip()
                 clean_str = re.sub(r'\.$', '', clean_str)
                 probe_locations[pb] = f"#{pb.replace('PB#','')} (°C) {clean_str}"
 
@@ -520,6 +510,7 @@ else:
         debinder_info = next((s for s in stages if s["Stage"] == "Debinder"), None) if has_debinder else None
         brazing_info = next((s for s in stages if s["Stage"] == "Brazing"), stages[-1])
 
+        # ป้องกันยอดพีคหายไปเนื่องจากการคำนวณระยะทางที่คาดเคลื่อน
         if f_variant == "NB1 (RAD)":
             process_time = df_m1["Time_Seconds"] - data1["detected_start_sec"]
             dryer_df = df_m1[(process_time >= 0) & (process_time <= 300)]
@@ -529,10 +520,11 @@ else:
             dryer_df = df_m1[(process_time >= 0) & (process_time <= 270)]
             debinder_df = None
         else:
-            dryer_df = df_m1[(df_m1["Distance_Meters"] >= dryer_info["Start (m)"]) & (df_m1["Distance_Meters"] <= dryer_info["End (m)"])]
-            debinder_df = df_m1[(df_m1["Distance_Meters"] >= debinder_info["Start (m)"]) & (df_m1["Distance_Meters"] <= debinder_info["End (m)"])] if debinder_info else None
+            dryer_df = df_m1[(df_m1["Distance_Meters"] >= -2.0) & (df_m1["Distance_Meters"] <= dryer_info["End (m)"] + 4.0)]
+            debinder_df = df_m1[(df_m1["Distance_Meters"] >= debinder_info["Start (m)"] - 2.0) & (df_m1["Distance_Meters"] <= debinder_info["End (m)"] + 4.0)] if debinder_info else None
         
-        brazing_df = df_m1[(df_m1["Distance_Meters"] >= brazing_info["Start (m)"]) & (df_m1["Distance_Meters"] <= brazing_info["End (m)"])]
+        # ใช้กราฟรวมทั้งหมดเพื่อไม่ให้ Brazing Max และ Dwell หายไป
+        brazing_df = df_m1
 
         matrix_rows = []
         for col in probe_cols:
