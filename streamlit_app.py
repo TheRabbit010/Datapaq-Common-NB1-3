@@ -419,8 +419,8 @@ def process_paq_file(file_bytes, filename):
                 if m:
                     prefix_tag = m.group(1)
                     actual_desc = m.group(2)
-                    # ลบคำว่า Top/Bot เดิมที่อาจขัดแย้งกับไดอะแกรมออก
-                    actual_desc = re.sub(r'^(?i)(bot\w*|top)\s*(core)?\s*[-/:]*\s*', '', actual_desc).strip()
+                    # ลบคำว่า Top/Bot เดิมที่อาจขัดแย้งกับไดอะแกรมออก (ย้าย flag มาไว้ด้านหลังแทนเพื่อแก้ re.PatternError)[cite: 8]
+                    actual_desc = re.sub(r'^(bot\w*|top)\s*(core)?\s*[-/:]*\s*', '', actual_desc, flags=re.IGNORECASE).strip()
                     # กำหนดค่าใหม่ตามไดอะแกรม
                     new_position = "Bottom" if pb_idx <= 4 else "Top"
                     probe_locations[pb_key] = f"{prefix_tag}{new_position} - {actual_desc}"
@@ -624,7 +624,7 @@ else:
                 st.success("✅ **OVERALL STATUS: PASS | สถานะภาพรวม: ผ่านเกณฑ์มาตรฐาน**\n\nThe thermal profile meets all specified requirements for this product. (โปรไฟล์อุณหภูมิผ่านข้อกำหนดทั้งหมดสำหรับผลิตภัณฑ์นี้)")
             else:
                 fail_str = ", ".join(list(dict.fromkeys(failed_points)))
-                st.error(f"❌ **OVERALL STATUS: FAIL | สถานะภาพรวม: ไม่ผ่านเกณฑ์มาตรฐาน**\n\nThe thermal profile does NOT meet the requirements. Please check the red valuesในตาราง. (โปรไฟล์อุณหภูมิไม่ผ่านข้อกำหนด กรุณาตรวจสอบค่าสีแดงในตาราง)\n\n**Failed Items (จุดที่ไม่ผ่าน):** {fail_str}")
+                st.error(f"❌ **OVERALL STATUS: FAIL | สถานะภาพรวม: ไม่ผ่านเกณฑ์มาตรฐาน**\n\nThe thermal profile does NOT meet the requirements. Please check the red values in the matrix. (โปรไฟล์อุณหภูมิไม่ผ่านข้อกำหนด กรุณาตรวจสอบค่าสีแดงในตาราง)\n\n**Failed Items (จุดที่ไม่ผ่าน):** {fail_str}")
 
         st.markdown("---")
         
