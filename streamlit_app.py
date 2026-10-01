@@ -135,9 +135,7 @@ def clean_paq_text(raw_text):
     for p in parts:
         p = re.sub(r'^[>#;\.,\|]+', '', p).strip() 
         if len(p) < 3: continue
-        
         p = re.sub(r'\b(Untitled|Entry Zone|XFER|WatCool|Exit curtain|AirCool|Exit Zone|Dryer#1|VSTS Exit Dryer|Exit Dryer|0Hl|!@f|"onB|aaa\.\.\.|FFGCC|bbbRRR|LNNSQ|OD@)\b', ' ', p, flags=re.IGNORECASE)
-        
         if re.search(r'(.)\1{4,}', p) or re.search(r'[@^\$|~<>{}\[\]]{2,}', p) or re.search(r'^[0-9\W]+$', p): continue 
         p = re.sub(r'#[0-9]{3,}', '', p)
         p = re.sub(r'\s+', ' ', p).strip()
@@ -154,10 +152,11 @@ def parse_operator_and_metadata(comments_list):
     
     clean_notes = re.sub(r'^\s*CAlarm\s*', '', combined, flags=re.IGNORECASE)
     
-    m_op = re.search(r'^([A-Za-z/]+)\s+(?:Monthly|WK|date|product|validation|run|test|DBLog|disconnected|Power|Chonburi|Plant|Factory)', clean_notes, re.IGNORECASE)
+    # อัปเดต Regex ให้รองรับชื่อ Sompong และขยายเงื่อนไขการดักจับชื่อ Operator 
+    m_op = re.search(r'^([A-Za-z/]+)\s+(?:Datapaq|NB[1-3]|Monthly|WK|date|product|validation|run|test|DBLog|disconnected|Power|Chonburi|Plant|Factory)', clean_notes, re.IGNORECASE)
     if m_op: op = m_op.group(1).strip()
-    elif re.search(r'\b(Niwat|Sunisa|Mongkhon)\b', clean_notes, re.IGNORECASE):
-        op = re.search(r'\b(Niwat|Sunisa|Mongkhon)\b', clean_notes, re.IGNORECASE).group(1).strip()
+    elif re.search(r'\b(Niwat|Sunisa|Mongkhon|Sompong|Operator)\b', clean_notes, re.IGNORECASE):
+        op = re.search(r'\b(Niwat|Sunisa|Mongkhon|Sompong|Operator)\b', clean_notes, re.IGNORECASE).group(1).strip()
 
     log_marker = re.search(r'(disconnected:|DBLog Cleared:|DP2300|CommIn:LOGGER_|USB_NOTIFY_|TickRate|VBatt|\(USB_VALID\)|CommsIn\s+\d+|LoggerState_NewState:|trigger_search|DP\d{4}|Logger:|Battery:|Firmware:|Serial No:)', clean_notes, flags=re.IGNORECASE)
     if log_marker:
@@ -193,11 +192,14 @@ def parse_operator_and_metadata(comments_list):
             clean_notes = re.sub(rf'\b{re.escape(token)}\b', '', clean_notes, flags=re.IGNORECASE)
             
     extra_probes = []
-    probe_start_match = re.search(r'\b(Probe\s*no\.?\s*[1-8]|PB#[1-8])\b', clean_notes, flags=re.IGNORECASE)
+    # แก้ไขการตัดคำ (Split) โพรบ เพื่อไม่ให้ Note ไปรวมร่างกับ Location
+    probe_start_match = re.search(r'(?:Probe\s*no\.?\s*[1-8]|PB#[1-8]|#[1-8]\s*\()', clean_notes, flags=re.IGNORECASE)
     if probe_start_match:
         probe_text = clean_notes[probe_start_match.start():]
         clean_notes = clean_notes[:probe_start_match.start()].strip()
-        extra_probes = [p.strip() for p in re.split(r'\.\s+', probe_text) if p.strip()]
+        # ตัดแบ่งข้อความทันทีก่อนเจอคำว่า Probe, PB# หรือ #1 ( เพื่อความแม่นยำ
+        extra_probes_raw = re.split(r'(?=(?:Probe\s*no\.?\s*[1-8]|PB#[1-8]|#[1-8]\s*\())', probe_text, flags=re.IGNORECASE)
+        extra_probes = [p.strip() for p in extra_probes_raw if p.strip()]
     
     clean_notes = re.sub(r'\s{2,}', ' ', clean_notes)
     clean_notes = re.sub(r'^[.,;\s]+', '', clean_notes)
@@ -278,13 +280,18 @@ def process_paq_file(file_bytes, filename):
 
     found_comments, found_recipes, found_probes = [], [], []
     for s in raw_texts:
-        is_recipe = re.search(r'\b(O2\s*Exit|ppm|CV\s*speed|mm/min|N2\s*Flow|WJ\s*Flow|Top\s*Temp|Bot\s*temp|Temp\s*Top|Temp\s*Bot|SP1|SP2\s*==>|Braze[d]?\s*Temp|Brazed|Brazing|Hz)\b', s, re.IGNORECASE)
+        # เพิ่ม During datapaq เข้าไปในเงื่อนไขการดักจับ Recipe เพื่อไม่ให้ตกหล่น
+        is_recipe = re.search(r'\b(During\s*datapaq|O2\s*Exit|ppm|CV\s*speed|mm/min|N2\s*Flow|WJ\s*Flow|Top\s*Temp|Bot\s*temp|Temp\s*Top|Temp\s*Bot|SP1|SP2\s*==>|Braze[d]?\s*Temp|Brazed|Brazing|Hz)\b', s, re.IGNORECASE)
         if is_recipe:
             s_rec = re.split(r'\b[A-Za-z]:\\', s)[0]
             s_rec = re.split(r'\bdouble m\b', s_rec, flags=re.IGNORECASE)[0]
             s_rec = re.sub(r'\b(?:CProcessFile|COven|CZone|CRecipe|CProduct|CAnalysisParameters|CToleranceCurve|CAlarmParametersDouble|CMaximumMinimumAnalysisParameters|CTimeAtMeasurementAnalysisParameters|CRiseFallAnalysisParameters|CSlopeAnalysisParameters|CPeakDifferenceAnalysisParameters|CAreaUnderCurveAnalysisParameters|CFurnaceSurveyAnalysisParameters)\b', '', s_rec).strip()
             s_rec = re.sub(r'^[>#;\.,\|]+', '', s_rec).strip()
             
+            # บล็อคอักขระขยะ (Garbage Filter) ที่มักจะหลุดเข้ามาจากการแปลง Binary
+            if re.search(r'[\]\[\^\`\@\{\}\\\|]{2,}', s_rec) or re.search(r'[A-Za-z0-9_]{20,}', s_rec):
+                continue
+                
             s_rec = re.sub(r'cer<>Hz\}', '', s_rec, flags=re.IGNORECASE)
             s_rec = re.sub(r'==\?mnojjo[^\s]+', '', s_rec, flags=re.IGNORECASE)
             s_rec = re.sub(r'(?i)hz@[a-z0-9\^\[\]\{\}\#\@\_\-\+V]+', '', s_rec).strip()
@@ -332,6 +339,8 @@ def process_paq_file(file_bytes, filename):
             if 1 <= idx <= 8:
                 ch_key = f"PB#{idx}"
                 loc_desc = clean_probe_location(m.group(2).strip())
+                # ล้างชื่อ Product หรือเงื่อนไขแปลกๆ ที่อาจไหลมารวมกับ Probe
+                loc_desc = re.sub(r'(?i)\b\d{1,2}SHP.*?(?:g\d{3}|ProdV|Conf)\b[.,\s]*', '', loc_desc).strip()
                 label = f"#{idx} (°C) {loc_desc}"
                 if ch_key not in probe_locations or len(label) > len(probe_locations.get(ch_key, "")):
                     probe_locations[ch_key] = label
@@ -352,37 +361,28 @@ def process_paq_file(file_bytes, filename):
     for col in probe_cols:
         if col not in probe_locations: probe_locations[col] = f"Channel {col.replace('PB#', '')} (Unlabeled)"
 
+    # จัดการรูปแบบ Recipe ที่ดึงมาให้สวยงาม
     process_settings = "\n".join(found_recipes) if found_recipes else "Standard Recipe Parameters"
+    process_settings = re.sub(r'^.*?(During\s*datapaq|O2\s*Exit|WJ\s*Flow|Tray\s*gap)', r'\1', process_settings, flags=re.IGNORECASE|re.DOTALL)
+    process_settings = re.sub(r'\n{3,}', '\n\n', process_settings).strip()
+
     recipe_corpus = f"{process_settings} {clean_comments_text} {filename}"
 
     # ======================= FURNACE IDENTIFICATION =======================
     furnace_id, furnace_variant = "NB3", "NB3"
     
-    # 1. ตรวจสอบ NB1 (RAD) - Radiator 
     if re.search(r'\bRAD\b', recipe_corpus, re.IGNORECASE): 
         furnace_id, furnace_variant = "NB1", "NB1 (RAD)"
-    
-    # 2. ตรวจสอบ NB2 (Tahc/Utahc)
     elif re.search(r'\b(Tahc|Utahc|UT|G2|NB2)\b', recipe_corpus, re.IGNORECASE): 
         furnace_id, furnace_variant = "NB2", "NB2 (Tahc/Utahc)"
-        
-    # 3. ตรวจสอบ NB1 (CDS/KN9/12SHP) (ย้ายขึ้นมาเช็คก่อน NB3 เพื่อให้ความสำคัญกับชื่อ Model ก่อน)
     elif re.search(r'\b(CDS|KN9|12SHP|DNGA|P42QR|P42V|SU2|F44|Y4L)\b', recipe_corpus, re.IGNORECASE): 
         furnace_id, furnace_variant = "NB1", "NB1 (CDS/KN9/12SHP)"
-    
-    # 4. ตรวจสอบ NB3 (BTM - Battery Thermal Management)
     elif re.search(r'\bBTM\b', recipe_corpus, re.IGNORECASE):
         furnace_id, furnace_variant = "NB3", "NB3 (BTM)"
-    
-    # 5. ตรวจสอบ NB3 (KE8, EVO, M2)
     elif re.search(r'\b(KE8|M2|EVO|NB3)\b', recipe_corpus, re.IGNORECASE):
         furnace_id, furnace_variant = "NB3", "NB3 (KE8 : M2/EVO)"
-    
-    # 6. ตรวจสอบการตั้งชื่อแบบสัปดาห์ (WKxx) หากไม่เข้าเงื่อนไขด้านบน ให้เป็น NB1 Standard
     elif (re.search(r'\bWK\d{1,2}\b', recipe_corpus, re.IGNORECASE) or re.search(r'\b\d{6}\b', recipe_corpus)): 
         furnace_id, furnace_variant = "NB1", "NB1 (Standard)"
-    
-    # 7. ตรวจสอบจากชื่อเตาที่ระบุตรงๆ ใน Note
     else:
         f_match = re.search(r'NB\s*Furnace\s*0?([123])\b|NB\s*#?\s*0?([123])\b|NB-0?([123])\b', recipe_corpus, re.IGNORECASE)
         if f_match: 
@@ -410,7 +410,6 @@ def process_paq_file(file_bytes, filename):
                 probe_locations[pb] = f"#{pb.replace('PB#','')} (°C) {clean_str}"
                 
     elif "NB1 (CDS" in furnace_variant:
-        # อิงตามรูปภาพไดอะแกรมด้านซ้าย โพรบ 1-4 = Bottom, โพรบ 5-8 = Top
         for pb_idx in range(1, 9):
             pb_key = f"PB#{pb_idx}"
             if pb_key in probe_locations:
@@ -419,9 +418,7 @@ def process_paq_file(file_bytes, filename):
                 if m:
                     prefix_tag = m.group(1)
                     actual_desc = m.group(2)
-                    # ลบคำว่า Top/Bot เดิมที่อาจขัดแย้งกับไดอะแกรมออก (ย้าย flag มาไว้ด้านหลังแทนเพื่อแก้ re.PatternError)
                     actual_desc = re.sub(r'^(bot\w*|top)\s*(core)?\s*[-/:]*\s*', '', actual_desc, flags=re.IGNORECASE).strip()
-                    # กำหนดค่าใหม่ตามไดอะแกรม
                     new_position = "Bottom" if pb_idx <= 4 else "Top"
                     probe_locations[pb_key] = f"{prefix_tag}{new_position} - {actual_desc}"
 
@@ -509,7 +506,6 @@ else:
             
         for z in zones:
             z_color = GROUP_COLORS.get(z["group"], "rgba(200, 200, 200, 0.2)")
-            # ชดเชยเวลาโดยนำเอา detected_start_sec (เวลาที่โพรบเริ่มเข้าเตา) มาบวก เพื่อให้โซนไปครอบกราฟพอดี
             z_start_sec = (z["start"] / data1['line_speed_mpm']) * 60 + data1['detected_start_sec']
             z_end_sec = ((z["start"] + z["length"]) / data1['line_speed_mpm']) * 60 + data1['detected_start_sec']
             z_start_time = base_date + pd.to_timedelta(z_start_sec, unit="s")
@@ -518,7 +514,6 @@ else:
             
         fig1.add_hline(y=cfg["trigger_temp_brazing"], line_dash="dash", line_color="red", annotation_text=f"Brazing ({cfg['trigger_temp_brazing']}°C)", annotation_position="bottom right")
 
-        # ปรับ range ให้อ่านจาก Time/Distance ต่ำสุด-สูงสุด ของจริง เพื่อป้องกันกราฟถูกตัดหลุดเฟรม
         fig1.update_layout(
             title=f"GLOBAL FURNACE PROFILE ({f_variant}): {data1['filename']}", yaxis=dict(title="Temperature (°C)", domain=[0.15, 1.0]), hovermode="x unified", template="plotly_white", height=600, margin=dict(b=80),
             xaxis=dict(title="Time (hh:mm:ss)", tickformat="%H:%M:%S", range=[base_date + pd.to_timedelta(t_min, unit="s"), base_date + pd.to_timedelta(t_max, unit="s")], anchor="y"),
@@ -717,7 +712,7 @@ else:
             if not df_z.empty:
                 z_vals = df_z[probe_cols].values.flatten()
                 z_vals = z_vals[~np.isnan(z_vals)]
-                if len(z_vals) > 0: stats_list.append({"Zone #": z["num"], "Zone Name": z["name"], "Group": z["group"], "Avg Temp (°C)": round(np.mean(z_vals), 2), "Std Dev (°C)": round(np.std(z_vals, ddof=1), 2), "Min Temp (°C)": round(np.min(z_vals), 2), "Max Temp (°C)": round(np.max(z_vals), 2), "Data Points": len(z_vals)})
+                if len(z_vals) > 0: stats_list.append({"Zone #": z["num"], "Zone Name": z["name"], "Group": z["group"], "Avg Temp (°C)": round(np.mean(z_vals), 2), "Std Dev (°C)": round(np.std(z_vals, ddof=1), 2), "Min Temp (°C)": round(np.min(z_vals), 2), "Max Temp (°C)": round(np.max(z_vals), 2), "Data Points": len(z_vals) })
         st.dataframe(pd.DataFrame(stats_list), use_container_width=True, hide_index=True)
 
     with tabs[3]:
@@ -754,7 +749,6 @@ else:
                 custom_hover1 = np.stack((df_m1["Time_HHMMSS"], df_m1["Time_Seconds"], df_m1["Distance_Meters"]), axis=-1)
                 custom_hover2 = np.stack((df_m2["Time_HHMMSS"], df_m2["Time_Seconds"], df_m2["Distance_Meters"]), axis=-1)
 
-                # ในกราฟเปรียบเทียบ ใช้พล็อตด้วย Distance_Meters แทนเวลา เพื่อให้จุดเข้าเตาของทุกไฟล์ (0 เมตร) เริ่มพร้อมกัน
                 for z in zones:
                     z_color = GROUP_COLORS.get(z["group"], "rgba(200, 200, 200, 0.2)")
                     fig_comp.add_vrect(
