@@ -232,7 +232,7 @@ def process_paq_file(file_bytes, filename):
 
     found_comments, found_recipes, found_probes = [], [], []
     for s in raw_texts:
-        # 1. จับ Recipe (เพิ่มคำว่า During datapaq, Top :, Bot : เพื่อดึงส่วนที่ขาด)
+        # 1. ค้นหาส่วนที่เป็น Recipe
         is_recipe = re.search(r'\b(During\s*datapaq|O2\s*Exit|CV\s*speed|mm/min|N2\s*Flow|WJ\s*Flow|Top\s*Temp|Bot\s*temp|Temp\s*Top|Temp\s*Bot|SP1|SP2|Braze[d]?\s*Temp|Brazed|Brazing|Top\s*:|Bot\s*:)\b', s, re.IGNORECASE)
         if is_recipe:
             s_rec = re.split(r'\b[A-Za-z]:\\', s)[0]
@@ -251,33 +251,42 @@ def process_paq_file(file_bytes, filename):
         s_clean = clean_paq_text(s)
         if not s_clean: continue
         
-        # 3. จับ Probe
+        # 3. ค้นหา Probes
         is_probe = re.search(r'\b(cooler|drill&insert|inside H/D|manifold|core|PB#\d|Probe\s*no|Left\s*core|Right\s*core|Middle\s*core)\b', s_clean, re.IGNORECASE)
         if is_probe and len(s_clean) < 80:
             if s_clean not in found_probes: found_probes.append(s_clean)
         else:
-            # 4. ที่เหลือคือ Notes / Comments ทั้งหมด (ดึงมาให้ครบ)
+            # 4. ที่เหลือคือ Notes ล้วนๆ
             if len(s_clean) >= 5 and s_clean not in found_comments:
                 found_comments.append(s_clean)
 
     # ------------------ EXTRACT METADATA & NOTES ------------------
     operator_name, company, site, _, extra_probes = parse_operator_and_metadata(found_comments)
     
-    # รวมข้อความ Notes แบบไม่ตัดทิ้ง (เพื่อรักษารายละเอียด "Monthly product validation..." ไว้)
     raw_notes = " ".join(found_comments)
     
-    # ลบแค่ข้อความระบบที่โผล่มาปน
+    # ลบข้อความระบบของ Datapaq ออกให้หมด
     raw_notes = re.sub(r'(disconnected:|DBLog Cleared:|DP2300|CommIn:LOGGER_.*?)(?=\s|$)', '', raw_notes, flags=re.IGNORECASE)
-    raw_notes = re.sub(r'\b(CAlarm\w*|CVersionInfo|CProbe\w*)\b', '', raw_notes, flags=re.IGNORECASE)
+    raw_notes = re.sub(r'\b(CAlarm\w*|CVersionInfo|CProbe\w*|CFurnace\w*)\b', '', raw_notes, flags=re.IGNORECASE)
     
-    # ลบชื่อ Operator/Site ออกจาก Notes หากมันมาโผล่ซ้ำ
+    # ลบชื่อ Operator/Site 
     for token in [operator_name, site, company]:
         if token and token != "N/A":
             raw_notes = re.sub(rf'\b{re.escape(token)}\b', '', raw_notes, flags=re.IGNORECASE)
 
+    # กรองข้อความขยะออก และจับเฉพาะเนื้อหาที่เป็น Note จริงๆ เช่น Monthly product validation, WK, Date, +DNGA ฯลฯ
+    note_match = re.search(r'(#\s*Note\s*[:\-]?\s*|Monthly\s*product|WK\d+|\+DNGA|For\s*product)(.*)', raw_notes, flags=re.IGNORECASE)
+    if note_match:
+        if "#" in note_match.group(1):
+            raw_notes = note_match.group(2)
+        else:
+            raw_notes = note_match.group(1) + note_match.group(2)
+    else:
+        # ตัดตัวอักษรขยะที่ขึ้นต้นออก
+        raw_notes = re.sub(r'^[^a-zA-Z0-9\+]+', '', raw_notes)
+
     raw_notes = re.sub(r'\s{2,}', ' ', raw_notes).strip()
     clean_comments_text = raw_notes if raw_notes else "-"
-
     # --------------------------------------------------------------
 
     valid_probes = []
@@ -319,18 +328,23 @@ def process_paq_file(file_bytes, filename):
     # ======================= PROCESS SETTINGS / RECIPE FORMATTING =======================
     process_settings = " ".join(found_recipes) if found_recipes else "Standard Recipe Parameters"
     
-    # 1. ตัดข้อความขยะก่อนหน้า "During datapaq" ทิ้งทั้งหมด
+    # 1. ตัดข้อความขยะก่อนหน้าคำว่า "During datapaq" ทิ้งทั้งหมด
     kw_start = re.search(r'(During\s*datapaq)', process_settings, flags=re.IGNORECASE)
     if kw_start:
         process_settings = process_settings[kw_start.start():]
+    else:
+        # Fallback กรณีไม่มีคำว่า During datapaq
+        process_settings = re.sub(r'^[^a-zA-Z0-9]+', '', process_settings).strip()
         
-    # 2. จัดรูปแบบการขึ้นบรรทัดใหม่ให้ตรงตามที่ผู้ใช้ต้องการ
+    # 2. จัดรูปแบบการขึ้นบรรทัดใหม่ให้กับตัวเลขและข้อมูลสำคัญ
     process_settings = re.sub(r'(WJ\s*Flow)', r'\n\1', process_settings, flags=re.IGNORECASE)
     process_settings = re.sub(r'(Braze[d]?\s*Temp\s*setting\s*:?)', r'\n\n\1', process_settings, flags=re.IGNORECASE)
+    
+    # จับ Top : / Bot : เพื่อให้เรียงบรรทัดแยกจากกันชัดเจน
     process_settings = re.sub(r'(Top\s*:)', r'\n\1', process_settings, flags=re.IGNORECASE)
     process_settings = re.sub(r'(Bot\s*:)', r'\n\1', process_settings, flags=re.IGNORECASE)
     
-    # 3. เคลียร์บรรทัดว่างที่เยอะเกินไป
+    # 3. จัดช่องไฟและการขึ้นบรรทัดใหม่ให้สวยงาม
     process_settings = re.sub(r'\n\s+', '\n', process_settings)
     process_settings = re.sub(r'\n{3,}', '\n\n', process_settings).strip()
     # ===================================================================================
