@@ -365,18 +365,18 @@ def process_paq_file(file_bytes, filename):
     # 2. ตรวจสอบ NB2 (Tahc/Utahc)
     elif re.search(r'\b(Tahc|Utahc|UT|G2|NB2)\b', recipe_corpus, re.IGNORECASE): 
         furnace_id, furnace_variant = "NB2", "NB2 (Tahc/Utahc)"
+        
+    # 3. ตรวจสอบ NB1 (CDS/KN9/12SHP) (ย้ายขึ้นมาเช็คก่อน NB3 เพื่อให้ความสำคัญกับชื่อ Model ก่อน)
+    elif re.search(r'\b(CDS|KN9|12SHP|DNGA|P42QR|P42V|SU2|F44|Y4L)\b', recipe_corpus, re.IGNORECASE): 
+        furnace_id, furnace_variant = "NB1", "NB1 (CDS/KN9/12SHP)"
     
-    # 3. ตรวจสอบ NB3 (BTM - Battery Thermal Management)
+    # 4. ตรวจสอบ NB3 (BTM - Battery Thermal Management)
     elif re.search(r'\bBTM\b', recipe_corpus, re.IGNORECASE):
         furnace_id, furnace_variant = "NB3", "NB3 (BTM)"
     
-    # 4. ตรวจสอบ NB3 (KE8, EVO, M2)
+    # 5. ตรวจสอบ NB3 (KE8, EVO, M2)
     elif re.search(r'\b(KE8|M2|EVO|NB3)\b', recipe_corpus, re.IGNORECASE):
         furnace_id, furnace_variant = "NB3", "NB3 (KE8 : M2/EVO)"
-    
-    # 5. ตรวจสอบ NB1 (CDS/KN9/12SHP) จากรูปแบบไฟล์ภาพที่ครอบคลุมรหัสโมเดลหลายกลุ่ม
-    elif re.search(r'\b(CDS|KN9|12SHP|DNGA|P42QR|P42V|SU2|F44)\b', recipe_corpus, re.IGNORECASE): 
-        furnace_id, furnace_variant = "NB1", "NB1 (CDS/KN9/12SHP)"
     
     # 6. ตรวจสอบการตั้งชื่อแบบสัปดาห์ (WKxx) หากไม่เข้าเงื่อนไขด้านบน ให้เป็น NB1 Standard
     elif (re.search(r'\bWK\d{1,2}\b', recipe_corpus, re.IGNORECASE) or re.search(r'\b\d{6}\b', recipe_corpus)): 
