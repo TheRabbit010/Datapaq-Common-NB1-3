@@ -419,7 +419,7 @@ def process_paq_file(file_bytes, filename):
                 if m:
                     prefix_tag = m.group(1)
                     actual_desc = m.group(2)
-                    # ลบคำว่า Top/Bot เดิมที่อาจขัดแย้งกับไดอะแกรมออก (ย้าย flag มาไว้ด้านหลังแทนเพื่อแก้ re.PatternError)[cite: 8]
+                    # ลบคำว่า Top/Bot เดิมที่อาจขัดแย้งกับไดอะแกรมออก (ย้าย flag มาไว้ด้านหลังแทนเพื่อแก้ re.PatternError)
                     actual_desc = re.sub(r'^(bot\w*|top)\s*(core)?\s*[-/:]*\s*', '', actual_desc, flags=re.IGNORECASE).strip()
                     # กำหนดค่าใหม่ตามไดอะแกรม
                     new_position = "Bottom" if pb_idx <= 4 else "Top"
@@ -496,23 +496,33 @@ else:
     with tabs[0]:
         st.subheader("Global Furnace Profile")
         fig1 = go.Figure()
-        end_time_stamp = pd.Timestamp("1970-01-01 00:00:00") + pd.to_timedelta(furnace_duration_secs + 120, unit="s")
+        
+        base_date = pd.Timestamp("1970-01-01 00:00:00")
+        t_min = df_m1["Time_Seconds"].min()
+        t_max = df_m1["Time_Seconds"].max()
+        d_min = df_m1["Distance_Meters"].min()
+        d_max = df_m1["Distance_Meters"].max()
+
         custom_hover1 = np.stack((df_m1["Time_HHMMSS"], df_m1["Time_Seconds"], df_m1["Distance_Meters"]), axis=-1)
         for col in probe_cols:
             fig1.add_trace(go.Scatter(x=df_m1["Time_Stamp"], y=df_m1[col], mode="lines", name=col, customdata=custom_hover1, hovertemplate="%{fullData.name}: %{y:.1f} °C<br>Time: %{customdata[0]}<br>Dist: %{customdata[2]:.2f} m", line=dict(color=PROBE_COLORS.get(col)), xaxis="x"))
+            
         for z in zones:
             z_color = GROUP_COLORS.get(z["group"], "rgba(200, 200, 200, 0.2)")
-            z_start_sec = (z["start"] / data1['line_speed_mpm']) * 60
-            z_end_sec = ((z["start"] + z["length"]) / data1['line_speed_mpm']) * 60
-            z_start_time = pd.Timestamp("1970-01-01 00:00:00") + pd.to_timedelta(z_start_sec, unit="s")
-            z_end_time = pd.Timestamp("1970-01-01 00:00:00") + pd.to_timedelta(z_end_sec, unit="s")
+            # ชดเชยเวลาโดยนำเอา detected_start_sec (เวลาที่โพรบเริ่มเข้าเตา) มาบวก เพื่อให้โซนไปครอบกราฟพอดี
+            z_start_sec = (z["start"] / data1['line_speed_mpm']) * 60 + data1['detected_start_sec']
+            z_end_sec = ((z["start"] + z["length"]) / data1['line_speed_mpm']) * 60 + data1['detected_start_sec']
+            z_start_time = base_date + pd.to_timedelta(z_start_sec, unit="s")
+            z_end_time = base_date + pd.to_timedelta(z_end_sec, unit="s")
             fig1.add_vrect(x0=z_start_time, x1=z_end_time, fillcolor=z_color, layer="below", line_width=0.5, line_dash="dot", line_color="rgba(120, 120, 120, 0.4)", annotation_text=f"{z['num']}.{z['name']}", annotation_position="top left", annotation=dict(font_size=9, font_color="#a0aab2", textangle=-90))
+            
         fig1.add_hline(y=cfg["trigger_temp_brazing"], line_dash="dash", line_color="red", annotation_text=f"Brazing ({cfg['trigger_temp_brazing']}°C)", annotation_position="bottom right")
 
+        # ปรับ range ให้อ่านจาก Time/Distance ต่ำสุด-สูงสุด ของจริง เพื่อป้องกันกราฟถูกตัดหลุดเฟรม
         fig1.update_layout(
             title=f"GLOBAL FURNACE PROFILE ({f_variant}): {data1['filename']}", yaxis=dict(title="Temperature (°C)", domain=[0.15, 1.0]), hovermode="x unified", template="plotly_white", height=600, margin=dict(b=80),
-            xaxis=dict(title="Time (hh:mm:ss)", tickformat="%H:%M:%S", range=[pd.Timestamp("1970-01-01 00:00:00"), end_time_stamp], anchor="y"),
-            xaxis2=dict(title="Distance (Meters)", overlaying="x", side="bottom", position=0.0, anchor="free", range=[0, total_furnace_length + (120 * data1['line_speed_mpm'] / 60)])
+            xaxis=dict(title="Time (hh:mm:ss)", tickformat="%H:%M:%S", range=[base_date + pd.to_timedelta(t_min, unit="s"), base_date + pd.to_timedelta(t_max, unit="s")], anchor="y"),
+            xaxis2=dict(title="Distance (Meters)", overlaying="x", side="bottom", position=0.0, anchor="free", range=[d_min, d_max])
         )
         fig1.add_trace(go.Scatter(x=df_m1["Distance_Meters"], y=df_m1[probe_cols[0]] * 0, showlegend=False, opacity=0, xaxis="x2", hoverinfo='skip'))
         st.plotly_chart(fig1, use_container_width=True)
@@ -636,7 +646,7 @@ else:
             m2.text_input("Company", data1["company"], disabled=True)
             m3.text_input("Site", data1["site"], disabled=True)
             st.text_area("💬 Notes for the current file", data1["operator_comment"], height=120)
-            st.text_area("⚙️ Recipe", data1["process_settings"], height=200)
+            st.text_area("⚙️️ Recipe", data1["process_settings"], height=200)
 
         with col_b:
             st.subheader("📍 Probe Locations")
@@ -741,20 +751,14 @@ else:
                 df_m2 = data2["df_master"]
                 fig_comp = go.Figure()
                 
-                # Setup custom hover templates
-                end_time_stamp = pd.Timestamp("1970-01-01 00:00:00") + pd.to_timedelta(furnace_duration_secs + 120, unit="s")
                 custom_hover1 = np.stack((df_m1["Time_HHMMSS"], df_m1["Time_Seconds"], df_m1["Distance_Meters"]), axis=-1)
                 custom_hover2 = np.stack((df_m2["Time_HHMMSS"], df_m2["Time_Seconds"], df_m2["Distance_Meters"]), axis=-1)
 
+                # ในกราฟเปรียบเทียบ ใช้พล็อตด้วย Distance_Meters แทนเวลา เพื่อให้จุดเข้าเตาของทุกไฟล์ (0 เมตร) เริ่มพร้อมกัน
                 for z in zones:
                     z_color = GROUP_COLORS.get(z["group"], "rgba(200, 200, 200, 0.2)")
-                    z_start_sec = (z["start"] / data1['line_speed_mpm']) * 60
-                    z_end_sec = ((z["start"] + z["length"]) / data1['line_speed_mpm']) * 60
-                    z_start_time = pd.Timestamp("1970-01-01 00:00:00") + pd.to_timedelta(z_start_sec, unit="s")
-                    z_end_time = pd.Timestamp("1970-01-01 00:00:00") + pd.to_timedelta(z_end_sec, unit="s")
-                    
                     fig_comp.add_vrect(
-                        x0=z_start_time, x1=z_end_time, 
+                        x0=z["start"], x1=z["start"] + z["length"], 
                         fillcolor=z_color, layer="below", line_width=0.5, 
                         line_dash="dot", line_color="rgba(120, 120, 120, 0.4)", 
                         annotation_text=f"{z['num']}.{z['name']}", 
@@ -770,22 +774,22 @@ else:
                 
                 for col in probe_cols:
                     if col in df_m1.columns: 
-                        fig_comp.add_trace(go.Scatter(x=df_m1["Time_Stamp"], y=df_m1[col], mode="lines", name=f"F1: {col}", customdata=custom_hover1, hovertemplate="F1 %{fullData.name}: %{y:.1f} °C<br>Time: %{customdata[0]}<br>Dist: %{customdata[2]:.2f} m", line=dict(color=PROBE_COLORS.get(col), width=1.5), xaxis="x"))
+                        fig_comp.add_trace(go.Scatter(x=df_m1["Distance_Meters"], y=df_m1[col], mode="lines", name=f"F1: {col}", customdata=custom_hover1, hovertemplate="F1 %{fullData.name}: %{y:.1f} °C<br>Time: %{customdata[0]}<br>Dist: %{x:.2f} m", line=dict(color=PROBE_COLORS.get(col), width=1.5)))
                 for col in data2["probe_cols"]:
                     if col in df_m2.columns: 
-                        fig_comp.add_trace(go.Scatter(x=df_m2["Time_Stamp"], y=df_m2[col], mode="lines", name=f"F2: {col}", customdata=custom_hover2, hovertemplate="F2 %{fullData.name}: %{y:.1f} °C<br>Time: %{customdata[0]}<br>Dist: %{customdata[2]:.2f} m", line=dict(dash='dash', color=PROBE_COLORS.get(col), width=1.5), xaxis="x"))
+                        fig_comp.add_trace(go.Scatter(x=df_m2["Distance_Meters"], y=df_m2[col], mode="lines", name=f"F2: {col}", customdata=custom_hover2, hovertemplate="F2 %{fullData.name}: %{y:.1f} °C<br>Time: %{customdata[0]}<br>Dist: %{x:.2f} m", line=dict(dash='dash', color=PROBE_COLORS.get(col), width=1.5)))
                 
+                d_min_comp = min(df_m1["Distance_Meters"].min(), df_m2["Distance_Meters"].min())
+                d_max_comp = max(df_m1["Distance_Meters"].max(), df_m2["Distance_Meters"].max())
+
                 fig_comp.update_layout(
-                    title=f"COMPARISON: {data1['filename']} vs {data2['filename']}", 
-                    yaxis=dict(title="Temperature (°C)", domain=[0.15, 1.0]), 
+                    title=f"COMPARISON (Aligned by Furnace Entry): {data1['filename']} vs {data2['filename']}", 
+                    yaxis=dict(title="Temperature (°C)"), 
                     hovermode="x unified", 
                     template="plotly_white", 
                     height=600,
                     margin=dict(b=80),
-                    xaxis=dict(title="Time (hh:mm:ss)", tickformat="%H:%M:%S", range=[pd.Timestamp("1970-01-01 00:00:00"), end_time_stamp], anchor="y"),
-                    xaxis2=dict(title="Distance (Meters)", overlaying="x", side="bottom", position=0.0, anchor="free", range=[0, total_furnace_length + (120 * data1['line_speed_mpm'] / 60)])
+                    xaxis=dict(title="Distance (Meters)", range=[d_min_comp, d_max_comp])
                 )
-                
-                fig_comp.add_trace(go.Scatter(x=df_m1["Distance_Meters"], y=df_m1[probe_cols[0]] * 0, showlegend=False, opacity=0, xaxis="x2", hoverinfo='skip'))
                 
                 st.plotly_chart(fig_comp, use_container_width=True)
