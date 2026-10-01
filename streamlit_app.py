@@ -596,7 +596,7 @@ else:
             m1.text_input("Name", data1["operator_name"], disabled=True)
             m2.text_input("Company", data1["company"], disabled=True)
             m3.text_input("Site", data1["site"], disabled=True)
-            st.text_area("💬 Comments", data1["operator_comment"], height=120)
+            st.text_area("💬 Notes for the current file", data1["operator_comment"], height=120)
             st.text_area("⚙️ Recipe", data1["process_settings"], height=200)
 
         with col_b:
