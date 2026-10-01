@@ -135,9 +135,7 @@ def clean_paq_text(raw_text):
     for p in parts:
         p = re.sub(r'^[>#;\.,\|]+', '', p).strip() 
         if len(p) < 3: continue
-        
         p = re.sub(r'\b(Untitled|Entry Zone|XFER|WatCool|Exit curtain|AirCool|Exit Zone|Dryer#1|VSTS Exit Dryer|Exit Dryer|0Hl|!@f|"onB|aaa\.\.\.|FFGCC|bbbRRR|LNNSQ|OD@)\b', ' ', p, flags=re.IGNORECASE)
-        
         if re.search(r'(.)\1{4,}', p) or re.search(r'[@^\$|~<>{}\[\]]{2,}', p) or re.search(r'^[0-9\W]+$', p): continue 
         p = re.sub(r'#[0-9]{3,}', '', p)
         p = re.sub(r'\s+', ' ', p).strip()
@@ -276,56 +274,30 @@ def process_paq_file(file_bytes, filename):
             for m in ascii_matches: raw_texts.append(m.decode('ascii', errors='ignore').strip())
         except: continue
 
-    found_comments, found_recipes, found_probes = [], [], []
-    extracted_note = ""
+    # ========================== NOTE EXTRACTION ==========================
+    # ค้นหา #Note จากข้อความทั้งหมดรวบยอด
+    full_text = "  ".join(raw_texts)
+    note_match = re.search(r'#\s*Note\s*[:\-]?\s*(.*?)(?:CProbe|CSample|CAlarm|CVersion|CProcess|CFurnace|During\s*datapaq|O2\s*Exit|\\\\|C:\\|[\$\#\^\~]{3,}|$)', full_text, flags=re.IGNORECASE)
     
-    for s in raw_texts:
-        
-        # 1. EXTRACT STRICTLY #Note
-        if not extracted_note:
-            note_m = re.search(r'#Note\s*:?\s*(.*?)(?:CProbe|CSample|CAlarm|CVersion|CProcess|\\\\|C:\\|[\$\#\^\~]{3,}|$)', s, flags=re.IGNORECASE)
-            if note_m:
-                n = note_m.group(1).strip()
-                n = re.sub(r'[^\w\s\.\,\-\/\(\)\=\+:]', ' ', n)
-                extracted_note = re.sub(r'\s{2,}', ' ', n).strip()
+    extracted_note = ""
+    if note_match:
+        n = note_match.group(1).strip()
+        n = re.sub(r'[^\w\s\.\,\-\/\(\)\=\+:]', ' ', n)
+        extracted_note = re.sub(r'\s{2,}', ' ', n).strip()
+    # =====================================================================
 
-        is_recipe = re.search(r'\b(O2\s*Exit|ppm|CV\s*speed|mm/min|N2\s*Flow|WJ\s*Flow|Top\s*Temp|Bot\s*temp|Temp\s*Top|Temp\s*Bot|SP1|SP2\s*==>|Braze[d]?\s*Temp|Brazed|Brazing|Hz)\b', s, re.IGNORECASE)
+    found_comments, found_recipes, found_probes = [], [], []
+    for s in raw_texts:
+        # ตัด Hz ออกจากเงื่อนไข is_recipe เพื่อป้องกันการจับข้อความขยะ
+        is_recipe = re.search(r'\b(O2\s*Exit|CV\s*speed|mm/min|N2\s*Flow|WJ\s*Flow|Top\s*Temp|Bot\s*temp|Temp\s*Top|Temp\s*Bot|SP1|SP2\s*==>|Braze[d]?\s*Temp|Brazed|Brazing)\b', s, re.IGNORECASE)
         if is_recipe:
             s_rec = re.split(r'\b[A-Za-z]:\\', s)[0]
             s_rec = re.split(r'\bdouble m\b', s_rec, flags=re.IGNORECASE)[0]
             s_rec = re.sub(r'\b(?:CProcessFile|COven|CZone|CRecipe|CProduct|CAnalysisParameters|CToleranceCurve|CAlarmParametersDouble|CMaximumMinimumAnalysisParameters|CTimeAtMeasurementAnalysisParameters|CRiseFallAnalysisParameters|CSlopeAnalysisParameters|CPeakDifferenceAnalysisParameters|CAreaUnderCurveAnalysisParameters|CFurnaceSurveyAnalysisParameters)\b', '', s_rec).strip()
             s_rec = re.sub(r'^[>#;\.,\|]+', '', s_rec).strip()
             
-            # --- GARBAGE PREFIX REMOVAL ---
-            # ตัดข้อความขยะที่มักโผล่มาก่อนสูตร (เช่น 9>B\chJTYX`hZ` ggjrkmvaelRXa',9)3?,<F)7? )2)
-            kw_match = re.search(r'(During\s*datapaq|O2\s*Exit|CV\s*SP|N2\s*Flow|WJ\s*Flow|Tray\s*gap|Dry\s*off|Debinder|Braze[d]?\s*Temp)', s_rec, flags=re.IGNORECASE)
-            if kw_match:
-                s_rec = s_rec[kw_match.start():]
-            else:
-                s_rec = re.sub(r'^[^a-zA-Z0-9]+', '', s_rec).strip()
-            # ------------------------------
-            
             s_rec = re.sub(r'cer<>Hz\}', '', s_rec, flags=re.IGNORECASE)
             s_rec = re.sub(r'==\?mnojjo[^\s]+', '', s_rec, flags=re.IGNORECASE)
-            s_rec = re.sub(r'(?i)hz@[a-z0-9\^\[\]\{\}\#\@\_\-\+V]+', '', s_rec).strip()
-            
-            s_rec = re.sub(r'(WJ Flow)', r'\n\1', s_rec)
-            s_rec = re.sub(r'(NB Top Temp)', r'\n\1', s_rec)
-            s_rec = re.sub(r'(NB Bot temp)', r'\n\1', s_rec)
-            
-            # --- BRAZED TEMP NEWLINE FIX ---
-            # จัดบรรทัด Brazed temp : Top & Bottom
-            s_rec = re.sub(r'(Braze[d]?\s*temp\s*:?\s*Top\s*&\s*Bottom)', r'\n\1', s_rec, flags=re.IGNORECASE)
-            s_rec = re.sub(r'(Braze[d]?\s*Temp\s*setting\s*:?)', r'\n\n\1', s_rec, flags=re.IGNORECASE)
-            # -------------------------------
-            
-            s_rec = re.sub(r'(Braze Temp)', r'\n\1', s_rec)
-            s_rec = re.sub(r'(Brazed temp)', r'\n\1', s_rec, flags=re.IGNORECASE)
-            s_rec = re.sub(r'(Brazing temp)', r'\n\1', s_rec, flags=re.IGNORECASE)
-            s_rec = re.sub(r'(Temp\s*Top\s*:?)', r'\n\1', s_rec, flags=re.IGNORECASE)
-            s_rec = re.sub(r'(Temp\s*Bot\s*:?)', r'\n\1', s_rec, flags=re.IGNORECASE)
-            
-            s_rec = re.sub(r'\n{3,}', '\n\n', s_rec).strip()
             
             if s_rec and s_rec not in found_recipes: found_recipes.append(s_rec)
             continue
@@ -344,7 +316,7 @@ def process_paq_file(file_bytes, filename):
 
     operator_name, company, site, clean_comments_text, extra_probes = parse_operator_and_metadata(found_comments)
     
-    # OVERRIDE: บังคับให้ช่อง Comments แสดงเฉพาะข้อความจาก #Note เท่านั้น
+    # แทนที่ข้อความช่อง Notes ด้วย Note ที่ดึงได้ (ถ้าไม่มีให้แสดง "-")
     if extracted_note:
         clean_comments_text = extracted_note
     else:
@@ -386,7 +358,23 @@ def process_paq_file(file_bytes, filename):
     for col in probe_cols:
         if col not in probe_locations: probe_locations[col] = f"Channel {col.replace('PB#', '')} (Unlabeled)"
 
+    # ======================= PROCESS SETTINGS / RECIPE FORMATTING =======================
     process_settings = "\n".join(found_recipes) if found_recipes else "Standard Recipe Parameters"
+    
+    # 1. ตัดข้อความขยะ/สัญลักษณ์ส่วนเกิน ก่อนจะถึงจุดเริ่มต้นสูตรจริงๆ
+    kw_start = re.search(r'(During\s*datapaq|O2\s*Exit|CV\s*SP|N2\s*Flow|WJ\s*Flow|Braze[d]?\s*Temp|Tray\s*gap)', process_settings, flags=re.IGNORECASE)
+    if kw_start:
+        process_settings = process_settings[kw_start.start():]
+        
+    # 2. เพิ่มระยะห่าง / ตัดบรรทัดใหม่
+    process_settings = re.sub(r'(WJ Flow)', r'\n\1', process_settings, flags=re.IGNORECASE)
+    process_settings = re.sub(r'(Braze[d]?\s*Temp\s*setting\s*:?)', r'\n\n\1', process_settings, flags=re.IGNORECASE)
+    process_settings = re.sub(r'(Braze[d]?\s*temp\s*:?\s*Top\s*&\s*Bottom)', r'\n\1', process_settings, flags=re.IGNORECASE)
+    
+    # 3. เคลียร์บรรทัดว่างที่เยอะเกินไป
+    process_settings = re.sub(r'\n{3,}', '\n\n', process_settings).strip()
+    # ===================================================================================
+
     recipe_corpus = f"{process_settings} {clean_comments_text} {filename}"
 
     furnace_id, furnace_variant = "NB3", "NB3"
@@ -630,7 +618,10 @@ else:
             m1.text_input("Name", data1["operator_name"], disabled=True)
             m2.text_input("Company", data1["company"], disabled=True)
             m3.text_input("Site", data1["site"], disabled=True)
-            st.text_area("💬 Comments", data1["operator_comment"], height=120)
+            
+            # อัปเดตเปลี่ยนชื่อช่องตรงนี้
+            st.text_area("💬 Notes for the current file", data1["operator_comment"], height=120)
+            
             st.text_area("⚙️ Recipe", data1["process_settings"], height=200)
 
         with col_b:
