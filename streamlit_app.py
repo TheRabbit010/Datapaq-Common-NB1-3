@@ -135,7 +135,9 @@ def clean_paq_text(raw_text):
     for p in parts:
         p = re.sub(r'^[>#;\.,\|]+', '', p).strip() 
         if len(p) < 3: continue
+        
         p = re.sub(r'\b(Untitled|Entry Zone|XFER|WatCool|Exit curtain|AirCool|Exit Zone|Dryer#1|VSTS Exit Dryer|Exit Dryer|0Hl|!@f|"onB|aaa\.\.\.|FFGCC|bbbRRR|LNNSQ|OD@)\b', ' ', p, flags=re.IGNORECASE)
+        
         if re.search(r'(.)\1{4,}', p) or re.search(r'[@^\$|~<>{}\[\]]{2,}', p) or re.search(r'^[0-9\W]+$', p): continue 
         p = re.sub(r'#[0-9]{3,}', '', p)
         p = re.sub(r'\s+', ' ', p).strip()
@@ -157,7 +159,51 @@ def parse_operator_and_metadata(comments_list):
     elif re.search(r'\b(Niwat|Sunisa|Mongkhon)\b', clean_notes, re.IGNORECASE):
         op = re.search(r'\b(Niwat|Sunisa|Mongkhon)\b', clean_notes, re.IGNORECASE).group(1).strip()
 
-    return op, comp, site, "", []
+    log_marker = re.search(r'(disconnected:|DBLog Cleared:|DP2300|CommIn:LOGGER_|USB_NOTIFY_|TickRate|VBatt|\(USB_VALID\)|CommsIn\s+\d+|LoggerState_NewState:|trigger_search|DP\d{4}|Logger:|Battery:|Firmware:|Serial No:)', clean_notes, flags=re.IGNORECASE)
+    if log_marker:
+        clean_notes = clean_notes[:log_marker.start()].strip()
+    
+    for token in [op, "VSTS", site, "CAlarm"]:
+        if token != "N/A":
+            clean_notes = re.sub(rf'^\s*{re.escape(token)}\b\s*', '', clean_notes, flags=re.IGNORECASE)
+
+    clean_notes = re.sub(r'NB\s+with\s+Debinder\s+NB\s+Furnace\s+Total\s*;\s*[\d,]+\s*mm', '', clean_notes, flags=re.IGNORECASE)
+    
+    chop_pattern = r'\b(NB\s*\d\s*DryOff|DryOff-Z|Xfer2\s*Watcol|Watcol1|AN\s*h8|ljjSQP|xwTLL)\b'
+    split_notes = re.split(chop_pattern, clean_notes, flags=re.IGNORECASE)
+    if len(split_notes) > 1:
+        clean_notes = split_notes[0].strip()
+    
+    garbage_start = re.search(r'([A-Za-z]\\[A-Za-z]|[\$\#\^\~]{2,}|\?[A-Z]{2,}|[a-z]{2,}\~|\bKO\\|\b\d{1,2}:\d{1,2}[A-Z]+)', clean_notes)
+    if garbage_start:
+        clean_notes = clean_notes[:garbage_start.start()]
+        
+    garbage_regex = r'(C:\\Program Files|IJ@1|a@FGr|YW@\.|dhmquz|QUZ|rx\s+knv|V\^e|ipyw~|MSYmqw~|AFMEKO|FIL257|CVersionInfo|1w-!|zfo@|8gDi|R@\?m|MQTDFI|HKN\*,|Double m\b|double m\b)'
+    clean_notes = re.split(garbage_regex, clean_notes, flags=re.IGNORECASE)[0]
+    
+    clean_notes = re.sub(r'(?i)\b[a-z]:\\[^\s]*', '', clean_notes)
+    clean_notes = re.sub(r'(?i)https?://[^\s]*', '', clean_notes)
+    clean_notes = re.sub(r'(?i)\\\\[a-z0-9_]+\\[^\s]*', '', clean_notes)
+    
+    clean_notes = re.sub(r'[^\w\s\.\,\-\/\(\)\=\+:]', ' ', clean_notes)
+    clean_notes = re.sub(r'\b[A-Z0-9]{15,}\b', '', clean_notes) 
+    
+    for token in [comp, site]:
+        if token != "N/A":
+            clean_notes = re.sub(rf'\b{re.escape(token)}\b', '', clean_notes, flags=re.IGNORECASE)
+            
+    extra_probes = []
+    probe_start_match = re.search(r'\b(Probe\s*no\.?\s*[1-8]|PB#[1-8])\b', clean_notes, flags=re.IGNORECASE)
+    if probe_start_match:
+        probe_text = clean_notes[probe_start_match.start():]
+        clean_notes = clean_notes[:probe_start_match.start()].strip()
+        extra_probes = [p.strip() for p in re.split(r'\.\s+', probe_text) if p.strip()]
+    
+    clean_notes = re.sub(r'\s{2,}', ' ', clean_notes)
+    clean_notes = re.sub(r'^[.,;\s]+', '', clean_notes)
+    clean_notes = re.sub(r'[\.,\s]+$', '.', clean_notes).strip()
+    
+    return op, comp, site, clean_notes if clean_notes else "N/A", extra_probes
 
 def clean_probe_location(loc_desc):
     loc_desc = re.sub(r'^[^A-Za-z]*(Top|Bottom|Middle|Left|Right|Core)', r'\1', loc_desc, flags=re.IGNORECASE)
@@ -232,8 +278,7 @@ def process_paq_file(file_bytes, filename):
 
     found_comments, found_recipes, found_probes = [], [], []
     for s in raw_texts:
-        # 1. ค้นหาส่วนที่เป็น Recipe
-        is_recipe = re.search(r'\b(During\s*datapaq|O2\s*Exit|CV\s*speed|mm/min|N2\s*Flow|WJ\s*Flow|Top\s*Temp|Bot\s*temp|Temp\s*Top|Temp\s*Bot|SP1|SP2|Braze[d]?\s*Temp|Brazed|Brazing|Top\s*:|Bot\s*:)\b', s, re.IGNORECASE)
+        is_recipe = re.search(r'\b(O2\s*Exit|ppm|CV\s*speed|mm/min|N2\s*Flow|WJ\s*Flow|Top\s*Temp|Bot\s*temp|Temp\s*Top|Temp\s*Bot|SP1|SP2\s*==>|Braze[d]?\s*Temp|Brazed|Brazing|Hz)\b', s, re.IGNORECASE)
         if is_recipe:
             s_rec = re.split(r'\b[A-Za-z]:\\', s)[0]
             s_rec = re.split(r'\bdouble m\b', s_rec, flags=re.IGNORECASE)[0]
@@ -242,53 +287,35 @@ def process_paq_file(file_bytes, filename):
             
             s_rec = re.sub(r'cer<>Hz\}', '', s_rec, flags=re.IGNORECASE)
             s_rec = re.sub(r'==\?mnojjo[^\s]+', '', s_rec, flags=re.IGNORECASE)
+            s_rec = re.sub(r'(?i)hz@[a-z0-9\^\[\]\{\}\#\@\_\-\+V]+', '', s_rec).strip()
+            s_rec = re.sub(r'^[^a-zA-Z0-9]+', '', s_rec).strip()
+            
+            s_rec = re.sub(r'(WJ Flow)', r'\n\1', s_rec)
+            s_rec = re.sub(r'(NB Top Temp)', r'\n\1', s_rec)
+            s_rec = re.sub(r'(NB Bot temp)', r'\n\1', s_rec)
+            s_rec = re.sub(r'(Braze Temp)', r'\n\1', s_rec)
+            s_rec = re.sub(r'(Brazed temp)', r'\n\1', s_rec, flags=re.IGNORECASE)
+            s_rec = re.sub(r'(Brazing temp)', r'\n\1', s_rec, flags=re.IGNORECASE)
+            s_rec = re.sub(r'(Temp\s*Top\s*:?)', r'\n\1', s_rec, flags=re.IGNORECASE)
+            s_rec = re.sub(r'(Temp\s*Bot\s*:?)', r'\n\1', s_rec, flags=re.IGNORECASE)
             
             if s_rec and s_rec not in found_recipes: found_recipes.append(s_rec)
             continue
         
-        # 2. ข้าม System Paths
         if re.search(r'\\\\|\b[A-Z]:\\', s) or re.search(r'\.(ovn|prd|pro|rec|paq|jpg|png|bmp)\b', s, re.IGNORECASE) or re.search(r'\\Users\\|Desktop', s, re.IGNORECASE): continue
         s_clean = clean_paq_text(s)
         if not s_clean: continue
         
-        # 3. ค้นหา Probes
         is_probe = re.search(r'\b(cooler|drill&insert|inside H/D|manifold|core|PB#\d|Probe\s*no|Left\s*core|Right\s*core|Middle\s*core)\b', s_clean, re.IGNORECASE)
-        if is_probe and len(s_clean) < 80:
+        is_note = re.search(r'\b(validation|product|new bar|WK\d|Loaded|Model|week\d|date\d|datapaq|spacer|gap|EVO|G100|Tahc)\b', s_clean, re.IGNORECASE)
+        
+        if is_probe and not is_note and len(s_clean) < 80:
             if s_clean not in found_probes: found_probes.append(s_clean)
         else:
-            # 4. ที่เหลือคือ Notes ล้วนๆ
-            if len(s_clean) >= 5 and s_clean not in found_comments:
-                found_comments.append(s_clean)
+            if s_clean not in found_comments: found_comments.append(s_clean)
 
-    # ------------------ EXTRACT METADATA & NOTES ------------------
-    operator_name, company, site, _, extra_probes = parse_operator_and_metadata(found_comments)
+    operator_name, company, site, clean_comments_text, extra_probes = parse_operator_and_metadata(found_comments)
     
-    raw_notes = " ".join(found_comments)
-    
-    # ลบข้อความระบบของ Datapaq ออกให้หมด
-    raw_notes = re.sub(r'(disconnected:|DBLog Cleared:|DP2300|CommIn:LOGGER_.*?)(?=\s|$)', '', raw_notes, flags=re.IGNORECASE)
-    raw_notes = re.sub(r'\b(CAlarm\w*|CVersionInfo|CProbe\w*|CFurnace\w*)\b', '', raw_notes, flags=re.IGNORECASE)
-    
-    # ลบชื่อ Operator/Site 
-    for token in [operator_name, site, company]:
-        if token and token != "N/A":
-            raw_notes = re.sub(rf'\b{re.escape(token)}\b', '', raw_notes, flags=re.IGNORECASE)
-
-    # กรองข้อความขยะออก และจับเฉพาะเนื้อหาที่เป็น Note จริงๆ เช่น Monthly product validation, WK, Date, +DNGA ฯลฯ
-    note_match = re.search(r'(#\s*Note\s*[:\-]?\s*|Monthly\s*product|WK\d+|\+DNGA|For\s*product)(.*)', raw_notes, flags=re.IGNORECASE)
-    if note_match:
-        if "#" in note_match.group(1):
-            raw_notes = note_match.group(2)
-        else:
-            raw_notes = note_match.group(1) + note_match.group(2)
-    else:
-        # ตัดตัวอักษรขยะที่ขึ้นต้นออก
-        raw_notes = re.sub(r'^[^a-zA-Z0-9\+]+', '', raw_notes)
-
-    raw_notes = re.sub(r'\s{2,}', ' ', raw_notes).strip()
-    clean_comments_text = raw_notes if raw_notes else "-"
-    # --------------------------------------------------------------
-
     valid_probes = []
     for p in found_probes + extra_probes:
         if re.search(r'\b(DryOff|Xfer|Watcol|AirC|Exit curtain|AN h8|ljjSQP|xwTLL|ZY\+|nif jgni|Exit)\b', p, re.IGNORECASE):
@@ -325,30 +352,7 @@ def process_paq_file(file_bytes, filename):
     for col in probe_cols:
         if col not in probe_locations: probe_locations[col] = f"Channel {col.replace('PB#', '')} (Unlabeled)"
 
-    # ======================= PROCESS SETTINGS / RECIPE FORMATTING =======================
-    process_settings = " ".join(found_recipes) if found_recipes else "Standard Recipe Parameters"
-    
-    # 1. ตัดข้อความขยะก่อนหน้าคำว่า "During datapaq" ทิ้งทั้งหมด
-    kw_start = re.search(r'(During\s*datapaq)', process_settings, flags=re.IGNORECASE)
-    if kw_start:
-        process_settings = process_settings[kw_start.start():]
-    else:
-        # Fallback กรณีไม่มีคำว่า During datapaq
-        process_settings = re.sub(r'^[^a-zA-Z0-9]+', '', process_settings).strip()
-        
-    # 2. จัดรูปแบบการขึ้นบรรทัดใหม่ให้กับตัวเลขและข้อมูลสำคัญ
-    process_settings = re.sub(r'(WJ\s*Flow)', r'\n\1', process_settings, flags=re.IGNORECASE)
-    process_settings = re.sub(r'(Braze[d]?\s*Temp\s*setting\s*:?)', r'\n\n\1', process_settings, flags=re.IGNORECASE)
-    
-    # จับ Top : / Bot : เพื่อให้เรียงบรรทัดแยกจากกันชัดเจน
-    process_settings = re.sub(r'(Top\s*:)', r'\n\1', process_settings, flags=re.IGNORECASE)
-    process_settings = re.sub(r'(Bot\s*:)', r'\n\1', process_settings, flags=re.IGNORECASE)
-    
-    # 3. จัดช่องไฟและการขึ้นบรรทัดใหม่ให้สวยงาม
-    process_settings = re.sub(r'\n\s+', '\n', process_settings)
-    process_settings = re.sub(r'\n{3,}', '\n\n', process_settings).strip()
-    # ===================================================================================
-
+    process_settings = "\n".join(found_recipes) if found_recipes else "Standard Recipe Parameters"
     recipe_corpus = f"{process_settings} {clean_comments_text} {filename}"
 
     furnace_id, furnace_variant = "NB3", "NB3"
@@ -592,7 +596,7 @@ else:
             m1.text_input("Name", data1["operator_name"], disabled=True)
             m2.text_input("Company", data1["company"], disabled=True)
             m3.text_input("Site", data1["site"], disabled=True)
-            st.text_area("💬 Notes for the current file", data1["operator_comment"], height=120)
+            st.text_area("💬 Comments", data1["operator_comment"], height=120)
             st.text_area("⚙️ Recipe", data1["process_settings"], height=200)
 
         with col_b:
