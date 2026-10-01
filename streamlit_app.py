@@ -408,6 +408,22 @@ def process_paq_file(file_bytes, filename):
                 clean_str = clean_probe_location(match.group(1).strip())
                 clean_str = re.sub(r'\.$', '', clean_str)
                 probe_locations[pb] = f"#{pb.replace('PB#','')} (°C) {clean_str}"
+                
+    elif "NB1 (CDS" in furnace_variant:
+        # อิงตามรูปภาพไดอะแกรมด้านซ้าย โพรบ 1-4 = Bottom, โพรบ 5-8 = Top
+        for pb_idx in range(1, 9):
+            pb_key = f"PB#{pb_idx}"
+            if pb_key in probe_locations:
+                desc = probe_locations[pb_key]
+                m = re.match(r'^(#[1-8]\s*\([^\)]+\)\s*)(.*)', desc)
+                if m:
+                    prefix_tag = m.group(1)
+                    actual_desc = m.group(2)
+                    # ลบคำว่า Top/Bot เดิมที่อาจขัดแย้งกับไดอะแกรมออก
+                    actual_desc = re.sub(r'^(?i)(bot\w*|top)\s*(core)?\s*[-/:]*\s*', '', actual_desc).strip()
+                    # กำหนดค่าใหม่ตามไดอะแกรม
+                    new_position = "Bottom" if pb_idx <= 4 else "Top"
+                    probe_locations[pb_key] = f"{prefix_tag}{new_position} - {actual_desc}"
 
     base_cfg = FURNACE_CONFIGS.get(furnace_id, FURNACE_CONFIGS["NB3"])
     cfg = dict(base_cfg)
@@ -608,7 +624,7 @@ else:
                 st.success("✅ **OVERALL STATUS: PASS | สถานะภาพรวม: ผ่านเกณฑ์มาตรฐาน**\n\nThe thermal profile meets all specified requirements for this product. (โปรไฟล์อุณหภูมิผ่านข้อกำหนดทั้งหมดสำหรับผลิตภัณฑ์นี้)")
             else:
                 fail_str = ", ".join(list(dict.fromkeys(failed_points)))
-                st.error(f"❌ **OVERALL STATUS: FAIL | สถานะภาพรวม: ไม่ผ่านเกณฑ์มาตรฐาน**\n\nThe thermal profile does NOT meet the requirements. Please check the red values in the matrix. (โปรไฟล์อุณหภูมิไม่ผ่านข้อกำหนด กรุณาตรวจสอบค่าสีแดงในตาราง)\n\n**Failed Items (จุดที่ไม่ผ่าน):** {fail_str}")
+                st.error(f"❌ **OVERALL STATUS: FAIL | สถานะภาพรวม: ไม่ผ่านเกณฑ์มาตรฐาน**\n\nThe thermal profile does NOT meet the requirements. Please check the red valuesในตาราง. (โปรไฟล์อุณหภูมิไม่ผ่านข้อกำหนด กรุณาตรวจสอบค่าสีแดงในตาราง)\n\n**Failed Items (จุดที่ไม่ผ่าน):** {fail_str}")
 
         st.markdown("---")
         
