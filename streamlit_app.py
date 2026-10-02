@@ -55,7 +55,6 @@ def style_inspection_matrix(row, variant, check_dryer_max=False):
         val = row[col]
         rule = rules.get(col)
         
-        # Override Rule สำหรับ CDS
         if variant == "NB1 (CDS/KN9/12SHP)" and col == "Brazing Dwell (≥577°C)":
             if probe_name in ["PB#1", "PB#5"]:
                 rule = (240, 465)
@@ -193,8 +192,8 @@ def parse_operator_and_metadata(comments_list):
 
     clean_notes = re.sub(r'NB\s+with\s+Debinder\s+NB\s+Furnace\s+Total\s*;\s*[\d,]+\s*mm', '', clean_notes, flags=re.IGNORECASE)
     
-    # --- ตัดข้อความที่เป็นชื่อโซนอัตโนมัติของระบบที่หลุดเข้ามาใน Notes ---
-    zone_junk_regex = r'\b(NB\s*[1-3]\s*with\s*Debinder|Dryer\s*Z\s*\d|Air\s*Cool\s*\d|DB\s*Z\s*\d|EXT\s*Dryer|ENT\s*DB|WatCool\s*\d|Exit\s*curtain\s*box|Exit\s*curtain|Exit|box)\b'
+    # --- ตัดข้อความที่เป็นชื่อโซนอัตโนมัติของระบบที่หลุดเข้ามาใน Notes เพิ่มเติม ---
+    zone_junk_regex = r'\b(NB\s*[1-3]\s*with\s*Debinder\s*Dryer\s*Z\s*\d|NB\s*[1-3]\s*with\s*Debinder|Dryer\s*Z\s*\d|Air\s*Cool\s*\d|DB\s*Z\s*\d|EXT\s*Dryer|ENT\s*DB|WatCool\s*\d|Exit\s*curtain\s*box|Exit\s*curtain|Exit|box)\b'
     clean_notes = re.sub(zone_junk_regex, ' ', clean_notes, flags=re.IGNORECASE)
     # -------------------------------------------------------------------
     
@@ -203,10 +202,8 @@ def parse_operator_and_metadata(comments_list):
     if len(split_notes) > 1:
         clean_notes = split_notes[0].strip()
         
-    # --- ตัดข้อความอ้างอิงตำแหน่งหัววัดที่หลุดเข้ามาใน Notes เพิ่มเติม ---
     clean_notes = re.sub(r'\s*[1-8]?Bot\s*-\s*[a-zA-Z\s/0-9]+\.\s*', ' ', clean_notes, flags=re.IGNORECASE)
     clean_notes = re.sub(r'\s*[1-8]?Top\s*-\s*[a-zA-Z\s/0-9]+\.\s*', ' ', clean_notes, flags=re.IGNORECASE)
-    # -------------------------------------------------------------------
     
     garbage_start = re.search(r'([A-Za-z]\\[A-Za-z]|[\$\#\^\~]{2,}|\?[A-Z]{2,}|[a-z]{2,}\~|\bKO\\|\b\d{1,2}:\d{1,2}[A-Z]+)', clean_notes)
     if garbage_start:
@@ -234,7 +231,6 @@ def parse_operator_and_metadata(comments_list):
         extra_probes_raw = re.split(r'(?=(?:Probe\s*no\.?\s*[1-8]|PB#[1-8]|#[1-8]\s*\())', probe_text, flags=re.IGNORECASE)
         extra_probes = [p.strip() for p in extra_probes_raw if p.strip()]
     
-    # เคลียร์ช่องว่างและ Colon (:) ที่ลอยๆ อยู่ออก
     clean_notes = re.sub(r'\s:\s(?=[A-Za-z])', ' ', clean_notes)
     clean_notes = re.sub(r'\s{2,}', ' ', clean_notes)
     clean_notes = re.sub(r'^[.,;\s:]+', '', clean_notes)
@@ -322,15 +318,16 @@ def process_paq_file(file_bytes, filename):
             s_rec = re.sub(r'\b(?:CProcessFile|COven|CZone|CRecipe|CProduct|CAnalysisParameters|CToleranceCurve|CAlarmParametersDouble|CMaximumMinimumAnalysisParameters|CTimeAtMeasurementAnalysisParameters|CRiseFallAnalysisParameters|CSlopeAnalysisParameters|CPeakDifferenceAnalysisParameters|CAreaUnderCurveAnalysisParameters|CFurnaceSurveyAnalysisParameters)\b', '', s_rec).strip()
             s_rec = re.sub(r'^[>#;\.,\|]+', '', s_rec).strip()
             
-            # อนุโลมให้ข้อความที่มีตัวเลขและเครื่องหมาย Slash ยาวๆ หรือติดลบผ่านไปได้ ไม่มองว่าเป็นขยะ
+            # --- ป้องกันไม่ให้โดนลบถ้าบรรทัดนั้นมีคำว่า Top หรือ Bot คู่กับตัวเลข ---
             if re.search(r'[\]\[\^\`\{\}\\\|]{2,}', s_rec) or re.search(r'[A-Za-z_]{20,}', s_rec):
-                if not re.search(r'(Top|Bot)\s*:\s*[-0-9/]+', s_rec, re.IGNORECASE):
-                    pass
+                if not re.search(r'(Top|Bot)\s*:\s*[-0-9/\s\'C\.]+', s_rec, re.IGNORECASE):
+                    s_rec = "" # ถ้าไม่ใช่ Top/Bot ให้ทิ้งไป
+            # -----------------------------------------------------------------
                 
             s_rec = re.sub(r'cer<>Hz\}', '', s_rec, flags=re.IGNORECASE)
             s_rec = re.sub(r'==\?mnojjo[^\s]+', '', s_rec, flags=re.IGNORECASE)
             s_rec = re.sub(r'(?i)hz@[a-z0-9\^\[\]\{\}\#\@\_\-\+V]+', '', s_rec).strip()
-            s_rec = re.sub(r'^[^a-zA-Z0-9\-]+', '', s_rec).strip()
+            s_rec = re.sub(r'^[^a-zA-Z0-9\-\:]+', '', s_rec).strip()
             
             s_rec = re.sub(r'(WJ Flow)', r'\n\1', s_rec)
             s_rec = re.sub(r'(NB Top Temp)', r'\n\1', s_rec)
@@ -341,8 +338,8 @@ def process_paq_file(file_bytes, filename):
             s_rec = re.sub(r'(Brazing temp)', r'\n\1', s_rec, flags=re.IGNORECASE)
             s_rec = re.sub(r'(Temp\s*Top\s*:?)', r'\n\1', s_rec, flags=re.IGNORECASE)
             s_rec = re.sub(r'(Temp\s*Bot\s*:?)', r'\n\1', s_rec, flags=re.IGNORECASE)
-            s_rec = re.sub(r'(Top:)', r'\n\1', s_rec, flags=re.IGNORECASE)
-            s_rec = re.sub(r'(Bot:)', r'\n\1', s_rec, flags=re.IGNORECASE)
+            s_rec = re.sub(r'(Top\s*:)', r'\n\1', s_rec, flags=re.IGNORECASE)
+            s_rec = re.sub(r'(Bot\s*:)', r'\n\1', s_rec, flags=re.IGNORECASE)
             
             if s_rec and s_rec not in found_recipes: found_recipes.append(s_rec)
             continue
