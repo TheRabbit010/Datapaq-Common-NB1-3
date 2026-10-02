@@ -39,7 +39,7 @@ STANDARD_SPECS = {
 
 VALIDATION_RULES = {
     "NB1 (RAD)": {"Dryer Max (°C)": (175, 260), "Debinder Max (°C)": (200, 375), "Brazing Max (°C)": (583, 607), "Dryer Dwell (≥175°C)": (60, 99999), "Debinder Dwell (≥200°C)": (120, 99999), "Brazing Dwell (≥577°C)": (150, 420), "Brazing Dwell (≥583°C)": (150, 99999)},
-    "NB1 (CDS/KN9/12SHP)": {"Dryer Max (°C)": (200, 350), "Debinder Max (°C)": (300, 375), "Brazing Max (°C)": (585, 607), "Dryer Dwell (≥200°C)": (90, 99999), "Debinder Dwell (≥300°C)": (150, 99999), "Brazing Dwell (≥577°C)": (120, 465)}, # Default will be overridden
+    "NB1 (CDS/KN9/12SHP)": {"Dryer Max (°C)": (200, 350), "Debinder Max (°C)": (300, 375), "Brazing Max (°C)": (585, 607), "Dryer Dwell (≥200°C)": (90, 99999), "Debinder Dwell (≥300°C)": (150, 99999), "Brazing Dwell (≥577°C)": (120, 465)},
     "NB3 (KE8 : M2/EVO)": {"Dryer Max (°C)": (200, 375), "Brazing Max (°C)": (595, 606), "Dryer Dwell (≥200°C)": (90, 99999), "Brazing Dwell (≥550°C)": (420, 630), "Brazing Dwell (≥577°C)": (270, 420), "Brazing Dwell (≥591°C)": (90, 240)},
     "NB2 (Tahc/Utahc)": {"Dryer Max (°C)": (200, 375), "Brazing Max (°C)": (596, 604), "Dryer Dwell (≥250°C)": (60, 99999), "Brazing Dwell (≥577°C)": (240, 420), "Brazing Dwell (≥591°C)": (90, 270)},
     "NB3 (BTM)": {"Dryer Max (°C)": (300, 375), "Brazing Max (°C)": (595, 608), "Dryer Dwell (≥300°C)": (120, 99999), "Brazing Dwell (≥577°C)": (240, 840), "Brazing Dwell (≥591°C)": (120, 720), "Brazing Dwell (≥600°C)": (0, 480)}
@@ -55,13 +55,12 @@ def style_inspection_matrix(row, variant, check_dryer_max=False):
         val = row[col]
         rule = rules.get(col)
         
-        # --- OVERRIDE RULE FOR CDS/KN9/12SHP ---
+        # Override Rule สำหรับ CDS
         if variant == "NB1 (CDS/KN9/12SHP)" and col == "Brazing Dwell (≥577°C)":
             if probe_name in ["PB#1", "PB#5"]:
-                rule = (240, 465)  # 4.00 - 7.45 min
+                rule = (240, 465)
             else:
-                rule = (120, 465)  # 2.00 - 7.45 min
-        # ---------------------------------------
+                rule = (120, 465)
         
         if not check_dryer_max and ("Dryer Max" in col or "Dryer Dwell" in col):
             rule = None
@@ -84,7 +83,6 @@ def style_inspection_matrix(row, variant, check_dryer_max=False):
                             if not (min_v <= total_s <= max_v): is_fail = True
                     except: pass
                     
-        # กำหนดสีพื้นหลัง (Background) ตามโซน
         base_bg = ""
         if "Dryer" in col:
             base_bg = "background-color: rgba(255, 235, 156, 0.15);" 
@@ -199,6 +197,11 @@ def parse_operator_and_metadata(comments_list):
     split_notes = re.split(chop_pattern, clean_notes, flags=re.IGNORECASE)
     if len(split_notes) > 1:
         clean_notes = split_notes[0].strip()
+        
+    # --- เพิ่มการตัดข้อความขยะที่มักติดมาใน Notes (เช่น 2Bot - Middle center...) ---
+    clean_notes = re.sub(r'\s*[1-8]?Bot\s*-\s*[a-zA-Z\s/0-9]+\.\s*', ' ', clean_notes, flags=re.IGNORECASE)
+    clean_notes = re.sub(r'\s*[1-8]?Top\s*-\s*[a-zA-Z\s/0-9]+\.\s*', ' ', clean_notes, flags=re.IGNORECASE)
+    # ---------------------------------------------------------------------------------
     
     garbage_start = re.search(r'([A-Za-z]\\[A-Za-z]|[\$\#\^\~]{2,}|\?[A-Z]{2,}|[a-z]{2,}\~|\bKO\\|\b\d{1,2}:\d{1,2}[A-Z]+)', clean_notes)
     if garbage_start:
@@ -312,8 +315,11 @@ def process_paq_file(file_bytes, filename):
             s_rec = re.sub(r'\b(?:CProcessFile|COven|CZone|CRecipe|CProduct|CAnalysisParameters|CToleranceCurve|CAlarmParametersDouble|CMaximumMinimumAnalysisParameters|CTimeAtMeasurementAnalysisParameters|CRiseFallAnalysisParameters|CSlopeAnalysisParameters|CPeakDifferenceAnalysisParameters|CAreaUnderCurveAnalysisParameters|CFurnaceSurveyAnalysisParameters)\b', '', s_rec).strip()
             s_rec = re.sub(r'^[>#;\.,\|]+', '', s_rec).strip()
             
+            # --- อนุโลมให้ข้อความที่มีตัวเลขและเครื่องหมาย Slash ยาวๆ หรือติดลบผ่านไปได้ ไม่มองว่าเป็นขยะ ---
             if re.search(r'[\]\[\^\`\{\}\\\|]{2,}', s_rec) or re.search(r'[A-Za-z_]{20,}', s_rec):
-                pass
+                if not re.search(r'(Top|Bot)\s*:\s*[-0-9/]+', s_rec, re.IGNORECASE):
+                    pass
+            # -----------------------------------------------------------------------------------------
                 
             s_rec = re.sub(r'cer<>Hz\}', '', s_rec, flags=re.IGNORECASE)
             s_rec = re.sub(r'==\?mnojjo[^\s]+', '', s_rec, flags=re.IGNORECASE)
