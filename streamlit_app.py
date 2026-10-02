@@ -74,27 +74,26 @@ def style_inspection_matrix(row, variant, check_dryer_max=False):
                             if not (min_v <= total_s <= max_v): is_fail = True
                     except: pass
                     
-        # จัดการสีพื้นหลังแบบแยกโซนให้ดูสบายตา
+        # กำหนดสีพื้นหลัง (Background) ตามโซน (ปรับ Opacity เป็น 0.15 ให้เห็นชัดขึ้น)
         base_bg = ""
-        base_color = "color: #e0e0e0;"
-        
         if "Dryer" in col:
-            base_bg = "background-color: rgba(255, 235, 156, 0.05);" # เหลืองอ่อนมาก
-            base_color = "color: #ffd54f;"
+            base_bg = "background-color: rgba(255, 235, 156, 0.15);" 
         elif "Debinder" in col:
-            base_bg = "background-color: rgba(255, 199, 119, 0.05);" # ส้มอ่อนมาก
-            base_color = "color: #ffb74d;"
+            base_bg = "background-color: rgba(255, 199, 119, 0.15);" 
         elif "Brazing" in col:
-            base_bg = "background-color: rgba(255, 160, 160, 0.05);" # แดงอ่อนมาก
-            base_color = "color: #ef5350;"
+            base_bg = "background-color: rgba(255, 160, 160, 0.15);" 
             
+        # กำหนดสีตัวอักษรเฉพาะผ่าน/ไม่ผ่าน
         if rule:
             if is_fail: 
-                styles[i] = 'background-color: rgba(255, 0, 0, 0.25); color: #ff5252; font-weight: bold; border: 1px solid #ff5252;'
+                # ถ้าไม่ผ่าน พื้นหลังแดงเข้ม และตัวอักษรสีแดง
+                styles[i] = f'background-color: rgba(255, 0, 0, 0.25); color: #ff5252; font-weight: bold; border: 1px solid #ff5252;'
             else: 
-                styles[i] = f'{base_bg} color: #69f0ae; font-weight: bold;'
+                # ถ้าผ่าน ใช้สีพื้นหลังของโซน และตัวอักษรสีเขียว
+                styles[i] = f'{base_bg} color: #00e676; font-weight: bold;'
         else:
-            styles[i] = f'{base_bg} {base_color}'
+            # ถ้าไม่มี Rule (ไม่ได้ถูก tick ตรวจสอบ) ใช้สีพื้นหลังของโซน และสีตัวอักษรปกติ
+            styles[i] = f'{base_bg} color: #e0e0e0;'
             
     return styles
 
