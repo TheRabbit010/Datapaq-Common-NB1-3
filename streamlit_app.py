@@ -55,7 +55,6 @@ def style_inspection_matrix(row, variant, check_dryer_max=False):
         val = row[col]
         rule = rules.get(col)
         
-        # Override Rule สำหรับ CDS
         if variant == "NB1 (CDS/KN9/12SHP)" and col == "Brazing Dwell (≥577°C)":
             if probe_name in ["PB#1", "PB#5"]:
                 rule = (240, 465)
@@ -526,10 +525,19 @@ else:
         fig1 = go.Figure()
         
         base_date = pd.Timestamp("1970-01-01 00:00:00")
-        t_min = df_m1["Time_Seconds"].min()
-        t_max = df_m1["Time_Seconds"].max()
-        d_min = df_m1["Distance_Meters"].min()
-        d_max = df_m1["Distance_Meters"].max()
+        
+        # --- NEW DEFAULT ZOOM RANGE (Process Area + Margin) ---
+        margin_sec_start = 120  # โชว์ก่อนเข้าเตา 2 นาที
+        margin_sec_end = 300    # โชว์หลังออกเตา 5 นาที
+        
+        proc_start_sec = max(0, data1['detected_start_sec'] - margin_sec_start)
+        proc_end_sec = data1['detected_start_sec'] + furnace_duration_secs + margin_sec_end
+        
+        t_view_start = base_date + pd.to_timedelta(proc_start_sec, unit="s")
+        t_view_end = base_date + pd.to_timedelta(proc_end_sec, unit="s")
+        d_view_start = ((proc_start_sec - data1['detected_start_sec']) / 60.0) * data1['line_speed_mpm']
+        d_view_end = ((proc_end_sec - data1['detected_start_sec']) / 60.0) * data1['line_speed_mpm']
+        # --------------------------------------------------------
 
         custom_hover1 = np.stack((df_m1["Time_HHMMSS"], df_m1["Time_Seconds"], df_m1["Distance_Meters"]), axis=-1)
         for col in probe_cols:
@@ -547,8 +555,8 @@ else:
 
         fig1.update_layout(
             title=f"GLOBAL FURNACE PROFILE ({f_variant}): {data1['filename']}", yaxis=dict(title="Temperature (°C)", domain=[0.15, 1.0]), hovermode="x unified", template="plotly_white", height=600, margin=dict(b=80),
-            xaxis=dict(title="Time (hh:mm:ss)", tickformat="%H:%M:%S", range=[base_date + pd.to_timedelta(t_min, unit="s"), base_date + pd.to_timedelta(t_max, unit="s")], anchor="y"),
-            xaxis2=dict(title="Distance (Meters)", overlaying="x", side="bottom", position=0.0, anchor="free", range=[d_min, d_max])
+            xaxis=dict(title="Time (hh:mm:ss)", tickformat="%H:%M:%S", range=[t_view_start, t_view_end], anchor="y"),
+            xaxis2=dict(title="Distance (Meters)", overlaying="x", side="bottom", position=0.0, anchor="free", range=[d_view_start, d_view_end])
         )
         fig1.add_trace(go.Scatter(x=df_m1["Distance_Meters"], y=df_m1[probe_cols[0]] * 0, showlegend=False, opacity=0, xaxis="x2", hoverinfo='skip'))
         st.plotly_chart(fig1, use_container_width=True)
@@ -820,8 +828,8 @@ else:
                     if col in df_m2.columns: 
                         fig_comp.add_trace(go.Scatter(x=df_m2["Distance_Meters"], y=df_m2[col], mode="lines", name=f"F2: {col}", customdata=custom_hover2, hovertemplate="F2 %{fullData.name}: %{y:.1f} °C<br>Time: %{customdata[0]}<br>Dist: %{x:.2f} m", line=dict(dash='dash', color=PROBE_COLORS.get(col), width=1.5)))
                 
-                d_min_comp = min(df_m1["Distance_Meters"].min(), df_m2["Distance_Meters"].min())
-                d_max_comp = max(df_m1["Distance_Meters"].max(), df_m2["Distance_Meters"].max())
+                d_min_comp = -5.0 # ตัดหางกราฟออก โดยเผื่อขอบซ้าย 5 เมตร
+                d_max_comp = total_furnace_length + 5.0 # เผื่อขอบขวา 5 เมตร
 
                 fig_comp.update_layout(
                     title=f"COMPARISON (Aligned by Furnace Entry): {data1['filename']} vs {data2['filename']}", 
