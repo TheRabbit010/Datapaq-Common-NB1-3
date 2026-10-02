@@ -193,9 +193,7 @@ def parse_operator_and_metadata(comments_list):
 
     clean_notes = re.sub(r'NB\s+with\s+Debinder\s+NB\s+Furnace\s+Total\s*;\s*[\d,]+\s*mm', '', clean_notes, flags=re.IGNORECASE)
     
-    # --- ตัดข้อความที่เป็นการต่อโซนอัตโนมัติจากระบบทิ้งทั้งหมด ---
     clean_notes = re.split(r':?\s*NB\s*[1-3]\s*with\s*Debinder', clean_notes, flags=re.IGNORECASE)[0]
-    # --------------------------------------------------------
     
     chop_pattern = r'\b(NB\s*\d\s*DryOff|DryOff-Z|Xfer2\s*Watcol|Watcol1|AN\s*h8|ljjSQP|xwTLL)\b'
     split_notes = re.split(chop_pattern, clean_notes, flags=re.IGNORECASE)
@@ -318,11 +316,9 @@ def process_paq_file(file_bytes, filename):
             s_rec = re.sub(r'\b(?:CProcessFile|COven|CZone|CRecipe|CProduct|CAnalysisParameters|CToleranceCurve|CAlarmParametersDouble|CMaximumMinimumAnalysisParameters|CTimeAtMeasurementAnalysisParameters|CRiseFallAnalysisParameters|CSlopeAnalysisParameters|CPeakDifferenceAnalysisParameters|CAreaUnderCurveAnalysisParameters|CFurnaceSurveyAnalysisParameters)\b', '', s_rec).strip()
             s_rec = re.sub(r'^[>#;\.,\|]+', '', s_rec).strip()
             
-            # --- อนุโลมให้ข้อความที่มีตัวเลขและ Slash (/) ไม่ถูกลบทิ้ง ---
             if re.search(r'[\]\[\^\`\{\}\\\|]{2,}', s_rec) or re.search(r'[A-Za-z_]{20,}', s_rec):
                 if not re.search(r'(Top|Bot)\s*:\s*[-0-9/]+', s_rec, re.IGNORECASE):
                     s_rec = ""
-            # -------------------------------------------------------------
                 
             s_rec = re.sub(r'cer<>Hz\}', '', s_rec, flags=re.IGNORECASE)
             s_rec = re.sub(r'==\?mnojjo[^\s]+', '', s_rec, flags=re.IGNORECASE)
@@ -333,7 +329,6 @@ def process_paq_file(file_bytes, filename):
             s_rec = re.sub(r'(NB Top Temp)', r'\n\1', s_rec)
             s_rec = re.sub(r'(NB Bot temp)', r'\n\1', s_rec)
             
-            # --- จัดการให้ Braze Temp:, Top:, Bot: ขึ้นบรรทัดใหม่ให้สวยงาม ---
             s_rec = re.sub(r'(Braze\s*Temp:?)', r'\n\1\n', s_rec, flags=re.IGNORECASE)
             s_rec = re.sub(r'(BrazeTemp:?)', r'\n\1\n', s_rec, flags=re.IGNORECASE)
             s_rec = re.sub(r'(Brazed temp)', r'\n\1', s_rec, flags=re.IGNORECASE)
@@ -342,12 +337,9 @@ def process_paq_file(file_bytes, filename):
             s_rec = re.sub(r'(Temp\s*Bot\s*:?)', r'\n\1', s_rec, flags=re.IGNORECASE)
             s_rec = re.sub(r'(Top\s*:)', r'\n\1', s_rec, flags=re.IGNORECASE)
             s_rec = re.sub(r'(Bot\s*:)', r'\n\1', s_rec, flags=re.IGNORECASE)
-            # ---------------------------------------------------------------
             
-            # --- ป้องกันการนำไปต่อท้ายโดยไม่เว้นบรรทัดสำหรับ During Datapaq ---
             if re.search(r'During\s*datapaq', s_rec, re.IGNORECASE):
                 s_rec = re.sub(r'^.*?(During\s*datapaq)', r'\1', s_rec, flags=re.IGNORECASE|re.DOTALL)
-            # ---------------------------------------------------------------
             
             if s_rec and s_rec not in found_recipes: found_recipes.append(s_rec)
             continue
@@ -495,6 +487,9 @@ def process_paq_file(file_bytes, filename):
 # ==============================================================================
 # STREAMLIT UI LAYOUT & MAIN APPLICATION
 # ==============================================================================
+if "paq2_uploader_key" not in st.session_state:
+    st.session_state.paq2_uploader_key = 0
+
 st.title("🔥 Datapaq .PAQ Furnace Profiler & Analyzer")
 st.markdown("Automated thermal profile extraction, zone metrics, and multi-file comparison.")
 
@@ -778,13 +773,22 @@ else:
 
     with tabs[4]:
         st.subheader("⚖️ Compare Profiles Across Two Files")
-        uploaded_file2 = st.file_uploader("📂 Upload 2nd .PAQ File to Compare", type=["paq"], key="paq2")
+        uploaded_file2 = st.file_uploader("📂 Upload 2nd .PAQ File to Compare", type=["paq"], key=f"paq2_{st.session_state.paq2_uploader_key}")
         
         if not uploaded_file2: 
             st.info("👆 Please upload a second `.paq` file above to view the comparison graph.")
         else:
             data2 = process_paq_file(uploaded_file2.getvalue(), uploaded_file2.name)
-            if not data2: st.error("❌ Failed to parse second `.paq` file.")
+            if not data2: 
+                st.error("❌ Failed to parse second `.paq` file.")
+            elif data1["furnace_id"] != data2["furnace_id"]:
+                st.error(f"❌ **ข้อมูลเตาอบไม่ตรงกัน (Furnace Mismatch)!**\n\n"
+                         f"🇹🇭 ไฟล์หลักคือเตา **{data1['furnace_id']}** แต่ไฟล์ที่เลือกมาเปรียบเทียบคือเตา **{data2['furnace_id']}** กรุณาเลือกไฟล์ที่เป็นเตาอบเดียวกัน\n\n"
+                         f"🇬🇧 The main file is **{data1['furnace_id']}**, but the comparison file is **{data2['furnace_id']}**. Please select a file from the same furnace.")
+                
+                if st.button("รับทราบและเลือกไฟล์ใหม่ (Acknowledge & Select New File)"):
+                    st.session_state.paq2_uploader_key += 1
+                    st.rerun()
             else:
                 df_m2 = data2["df_master"]
                 fig_comp = go.Figure()
