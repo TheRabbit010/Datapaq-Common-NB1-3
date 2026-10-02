@@ -31,7 +31,7 @@ GROUP_COLORS = {"Dryer": "rgba(255, 235, 156, 0.15)", "Debinder": "rgba(255, 199
 
 STANDARD_SPECS = {
     "NB1 (RAD)": {"id": "PRCNVR02044", "max": "Dryer: 175-260°C &nbsp;|&nbsp; Debinder: 200-375°C &nbsp;|&nbsp; Brazing: 583-607°C", "dwell": "Dryer ≥175°C ≥ 1.00 min &nbsp;|&nbsp; Debinder ≥200°C ≥ 2.00 min &nbsp;|&nbsp; Brazing ≥577°C = 2.30 - 7.00 min, ≥583°C ≥ 2.30 min"},
-    "NB1 (CDS/KN9/12SHP)": {"id": "PRCNVR02004 Rev.E + 2025 DSR TDOC_101182039 CDS BRAZING CYCLE", "max": "Dryer: 200-350°C &nbsp;|&nbsp; Debinder: 300-375°C &nbsp;|&nbsp; Brazing: 585-607°C", "dwell": "Dryer ≥200°C ≥ 1.30 min &nbsp;|&nbsp; Debinder ≥300°C ≥ 2.30 min &nbsp;|&nbsp; Brazing ≥577°C = 4.00 - 7.45 min"},
+    "NB1 (CDS/KN9/12SHP)": {"id": "PRCNVR02004 Rev.E + 2025 DSR TDOC_101182039 CDS BRAZING CYCLE", "max": "Dryer: 200-350°C &nbsp;|&nbsp; Debinder: 300-375°C &nbsp;|&nbsp; Brazing: 585-607°C", "dwell": "Dryer ≥200°C ≥ 1.30 min &nbsp;|&nbsp; Debinder ≥300°C ≥ 2.30 min &nbsp;|&nbsp; Brazing ≥577°C = 4.00 - 7.45 min (PB#1, PB#5) / 2.00 - 7.45 min (Others)"},
     "NB3 (KE8 : M2/EVO)": {"id": "PRCNVR02059 + V-PAS/T88/Chon Buri 1/2025-10-29-ZVK (Evaporator M2 ,EVO)", "max": "Dryer: 200-375°C &nbsp;|&nbsp; Brazing: M2 = 595-602°C , EVO = 598-606°C", "dwell": "Dryer ≥200°C ≥ 1.30 min &nbsp;|&nbsp; Brazing ≥550°C = 7.00 - 10.30 min, ≥577°C = 4.30 - 7.00 min, ≥591°C = 1.30 - 4.00 min"},
     "NB2 (Tahc/Utahc)": {"id": "PRCNVR02050", "max": "Dryer: 200-375°C &nbsp;|&nbsp; Brazing: 596-604°C", "dwell": "Dryer ≥250°C ≥ 1.00 min &nbsp;|&nbsp; Brazing ≥577°C = 4.00 - 7.00 min, ≥591°C = 1.30 - 4.30 min"},
     "NB3 (BTM)": {"id": "PRCNVR02033", "max": "Dryer: 300-375°C &nbsp;|&nbsp; Brazing: 595-608°C", "dwell": "Dryer ≥300°C ≥ 2.00 min &nbsp;|&nbsp; Brazing ≥577°C = 4.00 - 14.00 min, ≥591°C = 2.00 - 12.00 min, ≥600°C ≤ 8.00 min"}
@@ -39,7 +39,7 @@ STANDARD_SPECS = {
 
 VALIDATION_RULES = {
     "NB1 (RAD)": {"Dryer Max (°C)": (175, 260), "Debinder Max (°C)": (200, 375), "Brazing Max (°C)": (583, 607), "Dryer Dwell (≥175°C)": (60, 99999), "Debinder Dwell (≥200°C)": (120, 99999), "Brazing Dwell (≥577°C)": (150, 420), "Brazing Dwell (≥583°C)": (150, 99999)},
-    "NB1 (CDS/KN9/12SHP)": {"Dryer Max (°C)": (200, 350), "Debinder Max (°C)": (300, 375), "Brazing Max (°C)": (585, 607), "Dryer Dwell (≥200°C)": (90, 99999), "Debinder Dwell (≥300°C)": (150, 99999), "Brazing Dwell (≥577°C)": (240, 465)},
+    "NB1 (CDS/KN9/12SHP)": {"Dryer Max (°C)": (200, 350), "Debinder Max (°C)": (300, 375), "Brazing Max (°C)": (585, 607), "Dryer Dwell (≥200°C)": (90, 99999), "Debinder Dwell (≥300°C)": (150, 99999), "Brazing Dwell (≥577°C)": (120, 465)}, # Default will be overridden
     "NB3 (KE8 : M2/EVO)": {"Dryer Max (°C)": (200, 375), "Brazing Max (°C)": (595, 606), "Dryer Dwell (≥200°C)": (90, 99999), "Brazing Dwell (≥550°C)": (420, 630), "Brazing Dwell (≥577°C)": (270, 420), "Brazing Dwell (≥591°C)": (90, 240)},
     "NB2 (Tahc/Utahc)": {"Dryer Max (°C)": (200, 375), "Brazing Max (°C)": (596, 604), "Dryer Dwell (≥250°C)": (60, 99999), "Brazing Dwell (≥577°C)": (240, 420), "Brazing Dwell (≥591°C)": (90, 270)},
     "NB3 (BTM)": {"Dryer Max (°C)": (300, 375), "Brazing Max (°C)": (595, 608), "Dryer Dwell (≥300°C)": (120, 99999), "Brazing Dwell (≥577°C)": (240, 840), "Brazing Dwell (≥591°C)": (120, 720), "Brazing Dwell (≥600°C)": (0, 480)}
@@ -48,10 +48,20 @@ VALIDATION_RULES = {
 def style_inspection_matrix(row, variant, check_dryer_max=False):
     styles = [''] * len(row)
     rules = VALIDATION_RULES.get(variant, {})
+    probe_name = row.get("Probe", "")
+    
     for i, col in enumerate(row.index):
         if col == "Probe": continue
         val = row[col]
         rule = rules.get(col)
+        
+        # --- OVERRIDE RULE FOR CDS/KN9/12SHP ---
+        if variant == "NB1 (CDS/KN9/12SHP)" and col == "Brazing Dwell (≥577°C)":
+            if probe_name in ["PB#1", "PB#5"]:
+                rule = (240, 465)  # 4.00 - 7.45 min
+            else:
+                rule = (120, 465)  # 2.00 - 7.45 min
+        # ---------------------------------------
         
         if not check_dryer_max and ("Dryer Max" in col or "Dryer Dwell" in col):
             rule = None
@@ -74,7 +84,7 @@ def style_inspection_matrix(row, variant, check_dryer_max=False):
                             if not (min_v <= total_s <= max_v): is_fail = True
                     except: pass
                     
-        # กำหนดสีพื้นหลัง (Background) ตามโซน (ปรับ Opacity เป็น 0.15 ให้เห็นชัดขึ้น)
+        # กำหนดสีพื้นหลัง (Background) ตามโซน
         base_bg = ""
         if "Dryer" in col:
             base_bg = "background-color: rgba(255, 235, 156, 0.15);" 
@@ -83,16 +93,12 @@ def style_inspection_matrix(row, variant, check_dryer_max=False):
         elif "Brazing" in col:
             base_bg = "background-color: rgba(255, 160, 160, 0.15);" 
             
-        # กำหนดสีตัวอักษรเฉพาะผ่าน/ไม่ผ่าน
         if rule:
             if is_fail: 
-                # ถ้าไม่ผ่าน พื้นหลังแดงเข้ม และตัวอักษรสีแดง
                 styles[i] = f'background-color: rgba(255, 0, 0, 0.25); color: #ff5252; font-weight: bold; border: 1px solid #ff5252;'
             else: 
-                # ถ้าผ่าน ใช้สีพื้นหลังของโซน และตัวอักษรสีเขียว
                 styles[i] = f'{base_bg} color: #00e676; font-weight: bold;'
         else:
-            # ถ้าไม่มี Rule (ไม่ได้ถูก tick ตรวจสอบ) ใช้สีพื้นหลังของโซน และสีตัวอักษรปกติ
             styles[i] = f'{base_bg} color: #e0e0e0;'
             
     return styles
@@ -545,24 +551,17 @@ else:
 
         process_time = df_m1["Time_Seconds"] - data1["detected_start_sec"]
         
-        # ----------------------------------------------------------------------
-        # เงื่อนไขปรับปรุงใหม่ (NB1 ใช้เวลาล้วน / NB2-NB3 อิงตามระยะทางเดิม)
-        # ----------------------------------------------------------------------
         if "NB1" in f_variant:
-            # NB1 ทุกรุ่น (RAD, 12SHP+, KN9, ฯลฯ) ใช้เงื่อนไขเวลา 0-300s สำหรับ Dryer และ 300-930s สำหรับ Debinder
             dryer_df = df_m1[(process_time >= 0) & (process_time <= 300)]
             debinder_df = df_m1[(process_time > 300) & (process_time <= 930)] if has_debinder else None
         elif "NB2" in f_variant:
-            # NB2 คงรูปแบบเดิม (ใช้เวลา 0-270s สำหรับ Dryer)
             dryer_df = df_m1[(process_time >= 0) & (process_time <= 270)]
             debinder_df = None
         else:
-            # NB3 และรุ่นอื่นๆ คงรูปแบบเดิม (ใช้ระยะทางจาก stages config)
             dryer_df = df_m1[(df_m1["Distance_Meters"] >= dryer_info["Start (m)"]) & (df_m1["Distance_Meters"] <= dryer_info["End (m)"])]
             debinder_df = df_m1[(df_m1["Distance_Meters"] >= debinder_info["Start (m)"]) & (df_m1["Distance_Meters"] <= debinder_info["End (m)"])] if debinder_info else None
             
         brazing_df = df_m1[(df_m1["Distance_Meters"] >= brazing_info["Start (m)"]) & (df_m1["Distance_Meters"] <= brazing_info["End (m)"])]
-        # ----------------------------------------------------------------------
 
         matrix_rows = []
         for col in probe_cols:
@@ -624,6 +623,15 @@ else:
                 if not check_dryer and ("Dryer Max" in k or "Dryer Dwell" in k): continue 
                 
                 rule = val_rules.get(k)
+                
+                # --- OVERRIDE RULE FOR CDS/KN9/12SHP ---
+                if f_variant == "NB1 (CDS/KN9/12SHP)" and k == "Brazing Dwell (≥577°C)":
+                    if probe in ["PB#1", "PB#5"]:
+                        rule = (240, 465)
+                    else:
+                        rule = (120, 465)
+                # ---------------------------------------
+                
                 if not rule: continue
                 is_fail = False
                 if pd.isna(v) or v == "00:00:00" or v == "" or v == 0:
