@@ -154,7 +154,6 @@ def parse_operator_and_metadata(comments_list):
     
     clean_notes = re.sub(r'^\s*CAlarm\s*', '', combined, flags=re.IGNORECASE)
     
-    # อัปเดต Regex ให้รองรับชื่อ Sompong 
     m_op = re.search(r'^([A-Za-z/]+)\s+(?:Datapaq|NB[1-3]|Monthly|WK|date|product|validation|run|test|DBLog|disconnected|Power|Chonburi|Plant|Factory)', clean_notes, re.IGNORECASE)
     if m_op: 
         op = m_op.group(1).strip()
@@ -195,7 +194,6 @@ def parse_operator_and_metadata(comments_list):
             clean_notes = re.sub(rf'\b{re.escape(token)}\b', '', clean_notes, flags=re.IGNORECASE)
             
     extra_probes = []
-    # ตัดแยกส่วนของโพรบออกจาก Note ทันที
     probe_start_match = re.search(r'(?:Probe\s*no\.?\s*[1-8]|PB#[1-8]|#[1-8]\s*\()', clean_notes, flags=re.IGNORECASE)
     if probe_start_match:
         probe_text = clean_notes[probe_start_match.start():]
@@ -282,7 +280,6 @@ def process_paq_file(file_bytes, filename):
 
     found_comments, found_recipes, found_probes = [], [], []
     for s in raw_texts:
-        # เพิ่ม Top: และ Bot: เข้าไปในเงื่อนไข Recipe เพื่อจับตัวเลขอุณหภูมิติดลบหรือตัวเลขที่มี /
         is_recipe = re.search(r'\b(During\s*datapaq|O2\s*Exit|ppm|CV\s*speed|mm/min|N2\s*Flow|WJ\s*Flow|Top\s*Temp|Bot\s*temp|Temp\s*Top|Temp\s*Bot|SP1|SP2\s*==>|Braze[d]?\s*Temp|BrazeTemp|Brazed|Brazing|Hz|Top:|Bot:)\b', s, re.IGNORECASE)
         if is_recipe:
             s_rec = re.split(r'\b[A-Za-z]:\\', s)[0]
@@ -290,9 +287,8 @@ def process_paq_file(file_bytes, filename):
             s_rec = re.sub(r'\b(?:CProcessFile|COven|CZone|CRecipe|CProduct|CAnalysisParameters|CToleranceCurve|CAlarmParametersDouble|CMaximumMinimumAnalysisParameters|CTimeAtMeasurementAnalysisParameters|CRiseFallAnalysisParameters|CSlopeAnalysisParameters|CPeakDifferenceAnalysisParameters|CAreaUnderCurveAnalysisParameters|CFurnaceSurveyAnalysisParameters)\b', '', s_rec).strip()
             s_rec = re.sub(r'^[>#;\.,\|]+', '', s_rec).strip()
             
-            # อนุโลมให้ข้อความที่มีตัวเลขอุณหภูมิติดลบหรือ Slashes ไม่ถูกแบน
             if re.search(r'[\]\[\^\`\{\}\\\|]{2,}', s_rec) or re.search(r'[A-Za-z_]{20,}', s_rec):
-                pass # ผ่อนปรนเงื่อนไข garbage สำหรับ Recipe เพราะตัวเลขอย่าง 606/616 อาจจะหลุด
+                pass
                 
             s_rec = re.sub(r'cer<>Hz\}', '', s_rec, flags=re.IGNORECASE)
             s_rec = re.sub(r'==\?mnojjo[^\s]+', '', s_rec, flags=re.IGNORECASE)
@@ -365,7 +361,6 @@ def process_paq_file(file_bytes, filename):
         if col not in probe_locations: probe_locations[col] = f"Channel {col.replace('PB#', '')} (Unlabeled)"
 
     process_settings = "\n".join(found_recipes) if found_recipes else "Standard Recipe Parameters"
-    # ล้างข้อความขยะที่อาจปรากฏก่อนคำว่า During datapaq
     process_settings = re.sub(r'^.*?(During\s*datapaq)', r'\1', process_settings, flags=re.IGNORECASE|re.DOTALL)
     process_settings = re.sub(r'\n{3,}', '\n\n', process_settings).strip()
 
@@ -374,31 +369,18 @@ def process_paq_file(file_bytes, filename):
     # ======================= FURNACE IDENTIFICATION =======================
     furnace_id, furnace_variant = "NB3", "NB3"
     
-    # 1. ตรวจสอบ NB1 (RAD) - Radiator 
     if re.search(r'\bRAD\b', recipe_corpus, re.IGNORECASE): 
         furnace_id, furnace_variant = "NB1", "NB1 (RAD)"
-    
-    # 2. ตรวจสอบ NB2 (Tahc/Utahc)
     elif re.search(r'\b(Tahc|Utahc|UT|G2|NB2)\b', recipe_corpus, re.IGNORECASE): 
         furnace_id, furnace_variant = "NB2", "NB2 (Tahc/Utahc)"
-        
-    # 3. ตรวจสอบ NB1 (CDS/KN9/12SHP) (ย้ายขึ้นมาเช็คก่อน NB3 เพื่อให้ความสำคัญกับชื่อ Model ก่อน)
     elif re.search(r'\b(CDS|KN9|12SHP|DNGA|P42QR|P42V|SU2|F44|Y4L)\b', recipe_corpus, re.IGNORECASE): 
         furnace_id, furnace_variant = "NB1", "NB1 (CDS/KN9/12SHP)"
-    
-    # 4. ตรวจสอบ NB3 (BTM - Battery Thermal Management)
     elif re.search(r'\bBTM\b', recipe_corpus, re.IGNORECASE):
         furnace_id, furnace_variant = "NB3", "NB3 (BTM)"
-    
-    # 5. ตรวจสอบ NB3 (KE8, EVO, M2)
     elif re.search(r'\b(KE8|M2|EVO|NB3)\b', recipe_corpus, re.IGNORECASE):
         furnace_id, furnace_variant = "NB3", "NB3 (KE8 : M2/EVO)"
-    
-    # 6. ตรวจสอบการตั้งชื่อแบบสัปดาห์ (WKxx) หากไม่เข้าเงื่อนไขด้านบน ให้เป็น NB1 Standard
     elif (re.search(r'\bWK\d{1,2}\b', recipe_corpus, re.IGNORECASE) or re.search(r'\b\d{6}\b', recipe_corpus)): 
         furnace_id, furnace_variant = "NB1", "NB1 (Standard)"
-    
-    # 7. ตรวจสอบจากชื่อเตาที่ระบุตรงๆ ใน Note
     else:
         f_match = re.search(r'NB\s*Furnace\s*0?([123])\b|NB\s*#?\s*0?([123])\b|NB-0?([123])\b', recipe_corpus, re.IGNORECASE)
         if f_match: 
@@ -426,7 +408,6 @@ def process_paq_file(file_bytes, filename):
                 probe_locations[pb] = f"#{pb.replace('PB#','')} (°C) {clean_str}"
                 
     elif "NB1 (CDS" in furnace_variant:
-        # กำหนด Location ชัดเจนตายตัวตามไดอะแกรมอ้างอิงภาพขวาสุดสำหรับเตา CDS
         probe_locations["PB#1"] = "#1 (°C) Bottom - Center core / inside T32."
         probe_locations["PB#2"] = "#2 (°C) Bottom - Bottom left / inside T25 / far mani manifold 7mm."
         probe_locations["PB#3"] = "#3 (°C) Bottom - Top left / insideT1 / far manifold 7mm."
@@ -520,7 +501,6 @@ else:
             
         for z in zones:
             z_color = GROUP_COLORS.get(z["group"], "rgba(200, 200, 200, 0.2)")
-            # ชดเชยเวลาโดยนำเอา detected_start_sec (เวลาที่โพรบเริ่มเข้าเตา) มาบวก เพื่อให้โซนไปครอบกราฟพอดี
             z_start_sec = (z["start"] / data1['line_speed_mpm']) * 60 + data1['detected_start_sec']
             z_end_sec = ((z["start"] + z["length"]) / data1['line_speed_mpm']) * 60 + data1['detected_start_sec']
             z_start_time = base_date + pd.to_timedelta(z_start_sec, unit="s")
@@ -544,19 +524,26 @@ else:
         debinder_info = next((s for s in stages if s["Stage"] == "Debinder"), None) if has_debinder else None
         brazing_info = next((s for s in stages if s["Stage"] == "Brazing"), stages[-1])
 
-        if f_variant == "NB1 (RAD)":
-            process_time = df_m1["Time_Seconds"] - data1["detected_start_sec"]
+        process_time = df_m1["Time_Seconds"] - data1["detected_start_sec"]
+        
+        # ----------------------------------------------------------------------
+        # เงื่อนไขปรับปรุงใหม่ (NB1 ใช้เวลาล้วน / NB2-NB3 อิงตามต้นฉบับเดิม)
+        # ----------------------------------------------------------------------
+        if "NB1" in f_variant:
+            # NB1 ทุกรุ่น (RAD, 12SHP+, KN9, ฯลฯ) ใช้เงื่อนไขเวลา 0-300s สำหรับ Dryer และ 300-930s สำหรับ Debinder
             dryer_df = df_m1[(process_time >= 0) & (process_time <= 300)]
-            debinder_df = df_m1[(process_time > 300) & (process_time <= 930)]
+            debinder_df = df_m1[(process_time > 300) & (process_time <= 930)] if has_debinder else None
         elif "NB2" in f_variant:
-            process_time = df_m1["Time_Seconds"] - data1["detected_start_sec"]
+            # NB2 คงรูปแบบเดิม (ใช้เวลา 0-270s สำหรับ Dryer)
             dryer_df = df_m1[(process_time >= 0) & (process_time <= 270)]
             debinder_df = None
         else:
+            # NB3 และรุ่นอื่นๆ คงรูปแบบเดิม (ใช้ระยะทางจาก stages config)
             dryer_df = df_m1[(df_m1["Distance_Meters"] >= dryer_info["Start (m)"]) & (df_m1["Distance_Meters"] <= dryer_info["End (m)"])]
             debinder_df = df_m1[(df_m1["Distance_Meters"] >= debinder_info["Start (m)"]) & (df_m1["Distance_Meters"] <= debinder_info["End (m)"])] if debinder_info else None
-        
+            
         brazing_df = df_m1[(df_m1["Distance_Meters"] >= brazing_info["Start (m)"]) & (df_m1["Distance_Meters"] <= brazing_info["End (m)"])]
+        # ----------------------------------------------------------------------
 
         matrix_rows = []
         for col in probe_cols:
