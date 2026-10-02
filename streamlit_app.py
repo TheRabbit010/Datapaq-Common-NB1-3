@@ -73,9 +73,29 @@ def style_inspection_matrix(row, variant, check_dryer_max=False):
                             total_s = int(parts[0])*3600 + int(parts[1])*60 + int(parts[2])
                             if not (min_v <= total_s <= max_v): is_fail = True
                     except: pass
+                    
+        # จัดการสีพื้นหลังแบบแยกโซนให้ดูสบายตา
+        base_bg = ""
+        base_color = "color: #e0e0e0;"
+        
+        if "Dryer" in col:
+            base_bg = "background-color: rgba(255, 235, 156, 0.05);" # เหลืองอ่อนมาก
+            base_color = "color: #ffd54f;"
+        elif "Debinder" in col:
+            base_bg = "background-color: rgba(255, 199, 119, 0.05);" # ส้มอ่อนมาก
+            base_color = "color: #ffb74d;"
+        elif "Brazing" in col:
+            base_bg = "background-color: rgba(255, 160, 160, 0.05);" # แดงอ่อนมาก
+            base_color = "color: #ef5350;"
+            
         if rule:
-            if is_fail: styles[i] = 'background-color: rgba(255, 0, 0, 0.15); color: #ff4444; font-weight: bold;'
-            else: styles[i] = 'color: #00e676;'
+            if is_fail: 
+                styles[i] = 'background-color: rgba(255, 0, 0, 0.25); color: #ff5252; font-weight: bold; border: 1px solid #ff5252;'
+            else: 
+                styles[i] = f'{base_bg} color: #69f0ae; font-weight: bold;'
+        else:
+            styles[i] = f'{base_bg} {base_color}'
+            
     return styles
 
 FURNACE_CONFIGS = {
@@ -527,7 +547,7 @@ else:
         process_time = df_m1["Time_Seconds"] - data1["detected_start_sec"]
         
         # ----------------------------------------------------------------------
-        # เงื่อนไขปรับปรุงใหม่ (NB1 ใช้เวลาล้วน / NB2-NB3 อิงตามต้นฉบับเดิม)
+        # เงื่อนไขปรับปรุงใหม่ (NB1 ใช้เวลาล้วน / NB2-NB3 อิงตามระยะทางเดิม)
         # ----------------------------------------------------------------------
         if "NB1" in f_variant:
             # NB1 ทุกรุ่น (RAD, 12SHP+, KN9, ฯลฯ) ใช้เงื่อนไขเวลา 0-300s สำหรับ Dryer และ 300-930s สำหรับ Debinder
