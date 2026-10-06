@@ -73,33 +73,4 @@ def style_inspection_matrix(row, variant, check_dryer_max=False):
                 min_v, max_v = rule
                 if "Max (°C)" in col:
                     try:
-                        if not (min_v <= float(val) <= max_v): is_fail = True
-                    except: pass
-                elif "Dwell" in col:
-                    try:
-                        parts = str(val).split(':')
-                        if len(parts) == 3:
-                            total_s = int(parts[0])*3600 + int(parts[1])*60 + int(parts[2])
-                            if not (min_v <= total_s <= max_v): is_fail = True
-                    except: pass
-                    
-        base_bg = ""
-        if "Dryer" in col:
-            base_bg = "background-color: rgba(255, 235, 156, 0.15);" 
-        elif "Debinder" in col:
-            base_bg = "background-color: rgba(255, 199, 119, 0.15);" 
-        elif "Brazing" in col:
-            base_bg = "background-color: rgba(255, 160, 160, 0.15);" 
-            
-        if rule:
-            if is_fail: 
-                styles[i] = f'background-color: rgba(255, 0, 0, 0.25); color: #ff5252; font-weight: bold; border: 1px solid #ff5252;'
-            else: 
-                styles[i] = f'{base_bg} color: #00e676; font-weight: bold;'
-        else:
-            styles[i] = f'{base_bg} color: #e0e0e0;'
-            
-    return styles
-
-FURNACE_CONFIGS = {
-    "NB1": {"line_speed_mpm": 1.
+                        if not (min_v <=
