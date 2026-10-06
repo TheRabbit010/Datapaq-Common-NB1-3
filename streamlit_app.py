@@ -102,15 +102,24 @@ def style_inspection_matrix(row, variant, check_dryer_max=False):
     return styles
 
 FURNACE_CONFIGS = {
-    "NB1": {"line_speed_mpm": 1.400, "trigger_temp_brazing": 577.0,
+    "NB1": {
+        "line_speed_mpm": 1.400, 
+        "trigger_temp_brazing": 577.0,
         "zones": [{"num": 1, "name": "Dryer Z#1", "start": 0.00, "length": 3.15, "group": "Dryer"}, {"num": 2, "name": "Dryer Z#2", "start": 3.15, "length": 3.13, "group": "Dryer"}, {"num": 3, "name": "EXT Dryer", "start": 6.27, "length": 0.70, "group": "Dryer"}, {"num": 4, "name": "ENT DB", "start": 6.97, "length": 0.67, "group": "Debinder"}, {"num": 5, "name": "DB Z#1", "start": 7.64, "length": 3.13, "group": "Debinder"}, {"num": 6, "name": "DB Z#2", "start": 10.77, "length": 2.60, "group": "Debinder"}, {"num": 7, "name": "DB Z#3", "start": 13.37, "length": 2.60, "group": "Debinder"}, {"num": 8, "name": "DB Z#4", "start": 15.97, "length": 3.13, "group": "Debinder"}, {"num": 9, "name": "XFER#1", "start": 19.10, "length": 2.71, "group": "Heating"}, {"num": 10, "name": "Z#1", "start": 21.81, "length": 3.14, "group": "Heating"}, {"num": 11, "name": "Z#2", "start": 24.95, "length": 2.68, "group": "Heating"}, {"num": 12, "name": "Z#3", "start": 27.63, "length": 2.72, "group": "Heating"}, {"num": 13, "name": "Z#4", "start": 30.35, "length": 2.04, "group": "Heating"}, {"num": 14, "name": "Z#5", "start": 32.39, "length": 2.00, "group": "Heating"}, {"num": 15, "name": "Z#6", "start": 34.39, "length": 2.00, "group": "Heating"}, {"num": 16, "name": "Z#7", "start": 36.39, "length": 2.29, "group": "Heating"}, {"num": 17, "name": "WatCool#1", "start": 38.68, "length": 2.39, "group": "Cooling"}, {"num": 18, "name": "WatCool#2", "start": 41.07, "length": 1.90, "group": "Cooling"}, {"num": 19, "name": "Exit curtain box", "start": 42.97, "length": 1.90, "group": "Cooling"}, {"num": 20, "name": "XFER#2", "start": 44.87, "length": 0.60, "group": "Cooling"}, {"num": 21, "name": "Air Cool#1", "start": 45.47, "length": 1.25, "group": "Cooling"}, {"num": 22, "name": "Air Cool#2", "start": 46.72, "length": 1.25, "group": "Cooling"}, {"num": 23, "name": "Exit", "start": 47.97, "length": 1.85, "group": "Cooling"}],
-        "stages": [{"Stage": "Dryer", "Start (m)": 0.00, "End (m)": 6.28, "thresh": 200.0}, {"Stage": "Debinder", "Start (m)": 7.64, "End (m)": 19.10, "thresh": 300.0}, {"Stage": "Brazing", "Start (m)": 21.81, "End (m)": 42.97, "thresh": 577.0}]},
-    "NB2": {"line_speed_mpm": 1.560, "trigger_temp_brazing": 577.0,
+        "stages": [{"Stage": "Dryer", "Start (m)": 0.00, "End (m)": 6.28, "thresh": 200.0}, {"Stage": "Debinder", "Start (m)": 7.64, "End (m)": 19.10, "thresh": 300.0}, {"Stage": "Brazing", "Start (m)": 21.81, "End (m)": 42.97, "thresh": 577.0}]
+    },
+    "NB2": {
+        "line_speed_mpm": 1.560, 
+        "trigger_temp_brazing": 577.0,
         "zones": [{"num": 1, "name": "DryOff-Z#1", "start": 0.00, "length": 2.80, "group": "Dryer"}, {"num": 2, "name": "DryOff-Z#2", "start": 2.80, "length": 2.80, "group": "Dryer"}, {"num": 3, "name": "Xfer1", "start": 5.60, "length": 3.13, "group": "Dryer"}, {"num": 4, "name": "Z#1", "start": 8.73, "length": 3.60, "group": "Heating"}, {"num": 5, "name": "Z#2", "start": 12.33, "length": 2.70, "group": "Heating"}, {"num": 6, "name": "Z#3", "start": 15.03, "length": 2.40, "group": "Heating"}, {"num": 7, "name": "Z#4", "start": 17.43, "length": 2.10, "group": "Heating"}, {"num": 8, "name": "Z#5", "start": 19.53, "length": 2.30, "group": "Heating"}, {"num": 9, "name": "Z#6", "start": 21.83, "length": 1.90, "group": "Heating"}, {"num": 10, "name": "Z#7", "start": 23.73, "length": 2.20, "group": "Heating"}, {"num": 11, "name": "Xfer2", "start": 25.93, "length": 0.80, "group": "Heating"}, {"num": 12, "name": "Watcol1", "start": 26.73, "length": 1.75, "group": "Cooling"}, {"num": 13, "name": "Watcol2", "start": 28.48, "length": 1.85, "group": "Cooling"}, {"num": 14, "name": "Exit curtain box", "start": 30.33, "length": 2.30, "group": "Cooling"}, {"num": 15, "name": "Airc1", "start": 32.63, "length": 1.25, "group": "Cooling"}, {"num": 16, "name": "Airc2", "start": 33.88, "length": 1.25, "group": "Cooling"}, {"num": 17, "name": "Exit", "start": 35.13, "length": 1.80, "group": "Cooling"}],
-        "stages": [{"Stage": "Dryer", "Start (m)": 0.00, "End (m)": 5.60, "thresh": 200.0}, {"Stage": "Brazing", "Start (m)": 8.73, "End (m)": 30.33, "thresh": 577.0}]},
-    "NB3": {"line_speed_mpm": 1.270, "trigger_temp_brazing": 577.0,
+        "stages": [{"Stage": "Dryer", "Start (m)": 0.00, "End (m)": 5.60, "thresh": 200.0}, {"Stage": "Brazing", "Start (m)": 8.73, "End (m)": 30.33, "thresh": 577.0}]
+    },
+    "NB3": {
+        "line_speed_mpm": 1.270, 
+        "trigger_temp_brazing": 577.0,
         "zones": [{"num": 1, "name": "XFER", "start": 0.00, "length": 0.10, "group": "Dryer"}, {"num": 2, "name": "Dryer#1", "start": 0.10, "length": 1.85, "group": "Dryer"}, {"num": 3, "name": "Dryer#2", "start": 1.95, "length": 1.85, "group": "Dryer"}, {"num": 4, "name": "Dryer#3", "start": 3.80, "length": 1.95, "group": "Dryer"}, {"num": 5, "name": "XFER#1", "start": 5.75, "length": 3.39, "group": "Dryer"}, {"num": 6, "name": "Z#1", "start": 9.14, "length": 3.60, "group": "Heating"}, {"num": 7, "name": "Z#2", "start": 12.74, "length": 2.75, "group": "Heating"}, {"num": 8, "name": "Z#3", "start": 15.49, "length": 2.30, "group": "Heating"}, {"num": 9, "name": "Z#4", "start": 17.79, "length": 2.10, "group": "Heating"}, {"num": 10, "name": "Z#5", "start": 19.89, "length": 2.10, "group": "Heating"}, {"num": 11, "name": "Z#6", "start": 21.99, "length": 1.90, "group": "Heating"}, {"num": 12, "name": "Z#7", "start": 23.89, "length": 1.63, "group": "Heating"}, {"num": 13, "name": "WatCoo#1", "start": 25.52, "length": 2.56, "group": "Cooling"}, {"num": 14, "name": "WatCoo#2", "start": 28.08, "length": 1.90, "group": "Cooling"}, {"num": 15, "name": "Exit curtain box", "start": 29.98, "length": 1.90, "group": "Cooling"}, {"num": 16, "name": "XFER#2", "start": 31.88, "length": 0.60, "group": "Cooling"}, {"num": 17, "name": "AirCoo#1", "start": 32.48, "length": 1.25, "group": "Cooling"}, {"num": 18, "name": "AirCoo#2", "start": 33.73, "length": 1.25, "group": "Cooling"}, {"num": 19, "name": "Exit", "start": 34.98, "length": 1.85, "group": "Cooling"}],
-        "stages": [{"Stage": "Dryer", "Start (m)": 0.00, "End (m)": 5.75, "thresh": 200.0}, {"Stage": "Brazing", "Start (m)": 9.14, "End (m)": 29.98, "thresh": 577.0}]}
+        "stages": [{"Stage": "Dryer", "Start (m)": 0.00, "End (m)": 5.75, "thresh": 200.0}, {"Stage": "Brazing", "Start (m)": 9.14, "End (m)": 29.98, "thresh": 577.0}]
+    }
 }
 
 def decompress_stream(ole_obj, stream_name):
@@ -519,17 +528,24 @@ else:
     m_col2.metric("Conveyor Speed", f"{data1['line_speed_mpm']:.3f} m/min")
     m_col3.metric("Time in Furnace", f"{furnace_duration_secs}s (~{furnace_duration_mins:.1f} min)")
 
-    tabs = st.tabs(["📊 Profile Graphs", "🏭 Zone & Stage Summary", "📈 Statistics & Boxplots", "💾 Master Dataset & Export", "⚖️ Compare Files"])
+    tabs = st.tabs(["📊 Profile Graphs", "🏭 Zone & Stage Summary", "📈 Statistics & Boxplots", "💾 Master Dataset & Export", "⚖ Compare Files"])
 
     with tabs[0]:
         st.subheader("Global Furnace Profile")
         fig1 = go.Figure()
         
         base_date = pd.Timestamp("1970-01-01 00:00:00")
+        
+        # --- เพิ่มการจำกัดมุมมองแกน X ให้แสดงแค่ความยาวของเตา (ตัดส่วนหางที่เรียบยาวๆ ออกไป) ---
+        d_max_view = total_furnace_length + 1.0  # เพิ่ม Buffer 1 เมตรจากทางออก
+        t_max_view = data1['detected_start_sec'] + (d_max_view / data1['line_speed_mpm'] * 60)
+        
         t_min = df_m1["Time_Seconds"].min()
-        t_max = df_m1["Time_Seconds"].max()
+        t_max = min(df_m1["Time_Seconds"].max(), t_max_view)
+        
         d_min = df_m1["Distance_Meters"].min()
-        d_max = df_m1["Distance_Meters"].max()
+        d_max = min(df_m1["Distance_Meters"].max(), d_max_view)
+        # -----------------------------------------------------------------------------------
 
         custom_hover1 = np.stack((df_m1["Time_HHMMSS"], df_m1["Time_Seconds"], df_m1["Distance_Meters"]), axis=-1)
         for col in probe_cols:
@@ -562,27 +578,40 @@ else:
 
         process_time = df_m1["Time_Seconds"] - data1["detected_start_sec"]
         
+        # --- เปลี่ยนแปลงการระบุช่วงเวลาสำหรับ Dryer ตรงนี้ ---
         if "NB1" in f_variant:
-            dryer_df = df_m1[(process_time >= 0) & (process_time <= 300)]
+            dryer_max_df = df_m1[(process_time >= 0) & (process_time <= 300)]
+            dryer_dwell_df = dryer_max_df.copy()
             debinder_df = df_m1[(process_time > 300) & (process_time <= 930)] if has_debinder else None
         elif "NB2" in f_variant:
-            dryer_df = df_m1[(process_time >= 0) & (process_time <= 270)]
+            dryer_max_df = df_m1[(process_time >= 0) & (process_time <= 270)]
+            dryer_dwell_df = dryer_max_df.copy()
             debinder_df = None
+        elif f_variant == "NB3 (KE8 : M2/EVO)":
+            # Dryer Max Temp และ Dryer Dwell Time คิดที่ช่วงเวลา 00:00:00 ถึง 00:04:30 (270 วินาที)
+            dryer_max_df = df_m1[(process_time >= 0) & (process_time <= 270)]
+            dryer_dwell_df = dryer_max_df.copy()
+            debinder_df = df_m1[(df_m1["Distance_Meters"] >= debinder_info["Start (m)"]) & (df_m1["Distance_Meters"] <= debinder_info["End (m)"])] if debinder_info else None
         else:
-            dryer_df = df_m1[(df_m1["Distance_Meters"] >= dryer_info["Start (m)"]) & (df_m1["Distance_Meters"] <= dryer_info["End (m)"])]
+            dryer_max_df = df_m1[(df_m1["Distance_Meters"] >= dryer_info["Start (m)"]) & (df_m1["Distance_Meters"] <= dryer_info["End (m)"])]
+            dryer_dwell_df = dryer_max_df.copy()
             debinder_df = df_m1[(df_m1["Distance_Meters"] >= debinder_info["Start (m)"]) & (df_m1["Distance_Meters"] <= debinder_info["End (m)"])] if debinder_info else None
             
         brazing_df = df_m1[(df_m1["Distance_Meters"] >= brazing_info["Start (m)"]) & (df_m1["Distance_Meters"] <= brazing_info["End (m)"])]
 
         matrix_rows = []
         for col in probe_cols:
-            r = {"Probe": col, "Dryer Max (°C)": round(dryer_df[col].max(), 1) if not dryer_df.empty else np.nan}
+            # ใช้ dryer_max_df สำหรับหาค่า Max
+            r = {"Probe": col, "Dryer Max (°C)": round(dryer_max_df[col].max(), 1) if not dryer_max_df.empty else np.nan}
+            # ใช้ dryer_dwell_df สำหรับคำนวณ Dwell time
             for dt in [cfg.get("dryer_dwell_thresh_1"), cfg.get("dryer_dwell_thresh_2")]:
-                if dt is not None: r[f"Dryer Dwell (≥{int(dt)}°C)"] = format_dwell_time((dryer_df[col] >= dt).sum()) if not dryer_df.empty else "00:00:00"
+                if dt is not None: r[f"Dryer Dwell (≥{int(dt)}°C)"] = format_dwell_time((dryer_dwell_df[col] >= dt).sum()) if not dryer_dwell_df.empty else "00:00:00"
+                
             if has_debinder and debinder_df is not None:
                 d_thresh = cfg.get("debinder_dwell_thresh", 300.0) or 300.0
                 r["Debinder Max (°C)"] = round(debinder_df[col].max(), 1) if not debinder_df.empty else np.nan
                 r[f"Debinder Dwell (≥{int(d_thresh)}°C)"] = format_dwell_time((debinder_df[col] >= d_thresh).sum()) if not debinder_df.empty else "00:00:00"
+                
             r["Brazing Max (°C)"] = round(brazing_df[col].max(), 1) if not brazing_df.empty else np.nan
             for bt in [cfg.get(f"brazing_dwell_thresh_{i}") for i in range(1, 5)]:
                 if bt is not None: r[f"Brazing Dwell (≥{int(bt)}°C)"] = format_dwell_time((brazing_df[col] >= bt).sum()) if not brazing_df.empty else "00:00:00"
