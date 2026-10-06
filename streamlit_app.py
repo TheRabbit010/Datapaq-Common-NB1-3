@@ -849,8 +849,12 @@ else:
                     if col in df_m2.columns: 
                         fig_comp.add_trace(go.Scatter(x=df_m2["Distance_Meters"], y=df_m2[col], mode="lines", name=f"F2: {col}", customdata=custom_hover2, hovertemplate="F2 %{fullData.name}: %{y:.1f} °C<br>Time: %{customdata[0]}<br>Dist: %{x:.2f} m", line=dict(dash='dash', color=PROBE_COLORS.get(col), width=1.5)))
                 
+                # --- เพิ่มการจำกัดมุมมองแกน X ให้แสดงแค่ความยาวของเตาสำหรับกราฟเปรียบเทียบ ---
+                d_max_view = total_furnace_length + 1.0
                 d_min_comp = min(df_m1["Distance_Meters"].min(), df_m2["Distance_Meters"].min())
-                d_max_comp = max(df_m1["Distance_Meters"].max(), df_m2["Distance_Meters"].max())
+                d_max_actual = max(df_m1["Distance_Meters"].max(), df_m2["Distance_Meters"].max())
+                d_max_comp = min(d_max_actual, d_max_view)
+                # -------------------------------------------------------------------------
 
                 fig_comp.update_layout(
                     title=f"COMPARISON (Aligned by Furnace Entry): {data1['filename']} vs {data2['filename']}", 
