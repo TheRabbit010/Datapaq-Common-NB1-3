@@ -53,6 +53,19 @@ def style_inspection_matrix(row, variant, check_dryer_max=False):
     for i, col in enumerate(row.index):
         if col == "Probe": continue
         val = row[col]
+        
+        base_bg = ""
+        if "Dryer" in col:
+            base_bg = "background-color: rgba(255, 235, 156, 0.15);" 
+        elif "Debinder" in col:
+            base_bg = "background-color: rgba(255, 199, 119, 0.15);" 
+        elif "Brazing" in col:
+            base_bg = "background-color: rgba(255, 160, 160, 0.15);" 
+            
+        if val == "***":
+            styles[i] = f'{base_bg} color: #ffeb3b; font-weight: bold; text-align: center;'
+            continue
+
         rule = rules.get(col)
         
         # Override Rule สำหรับ CDS
@@ -66,7 +79,7 @@ def style_inspection_matrix(row, variant, check_dryer_max=False):
             rule = None
             
         is_fail = False
-        if pd.isna(val) or val == "00:00:00" or val == "" or val == 0:
+        if pd.isna(val) or val == "00:00:00" or val == "" or val == 0 or val == "N/A":
             if rule and rule[0] > 0: is_fail = True
         else:
             if rule:
@@ -83,14 +96,6 @@ def style_inspection_matrix(row, variant, check_dryer_max=False):
                             if not (min_v <= total_s <= max_v): is_fail = True
                     except: pass
                     
-        base_bg = ""
-        if "Dryer" in col:
-            base_bg = "background-color: rgba(255, 235, 156, 0.15);" 
-        elif "Debinder" in col:
-            base_bg = "background-color: rgba(255, 199, 119, 0.15);" 
-        elif "Brazing" in col:
-            base_bg = "background-color: rgba(255, 160, 160, 0.15);" 
-            
         if rule:
             if is_fail: 
                 styles[i] = f'background-color: rgba(255, 0, 0, 0.25); color: #ff5252; font-weight: bold; border: 1px solid #ff5252;'
@@ -254,7 +259,7 @@ def process_paq_file(file_bytes, filename):
     ole_bytes = io.BytesIO(file_bytes)
     ole = olefile.OleFileIO(ole_bytes)
     
-    # 1. EXTRACT RAW TEXT FIRST (To find channel mapping)
+    # 1. EXTRACT RAW TEXT FIRST
     raw_texts = []
     embedded_img = None
     for stream_path in ole.listdir():
@@ -279,7 +284,7 @@ def process_paq_file(file_bytes, filename):
             for m in ascii_matches: raw_texts.append(m.decode('ascii', errors='ignore').strip())
         except: continue
 
-    # 2. BUILD CHANNEL MAPPING (Map internal stream index to physical probe channel)
+    # 2. BUILD CHANNEL MAPPING 
     channel_mapping = {}
     for s in raw_texts:
         matches = re.findall(r'#probe\s+number\s+#(\d+)\s*=\s*(\d+)', s, re.IGNORECASE)
@@ -294,7 +299,6 @@ def process_paq_file(file_bytes, filename):
     for idx, stream_path in enumerate(probe_streams):
         stream_name = "/".join(stream_path)
         internal_idx = idx + 1
-        # Use mapping if found, else default to internal index
         physical_ch = channel_mapping.get(internal_idx, internal_idx)
         col_name = f"PB#{physical_ch}"
         
@@ -314,34 +318,34 @@ def process_paq_file(file_bytes, filename):
     df_master.insert(2, "Time_HHMMSS", df_master["Time_Stamp"].dt.strftime('%H:%M:%S'))
 
     # =================================================================================
-    # --- AUTO-FILTERING: REMOVE ERRATIC OR INCOMPLETE PROBES ---
+    # --- AUTO-FILTERING: REMOVE ERRATIC OR INCOMPLETE PROBES (REPLACE WITH NaN) ---
     # =================================================================================
-    initial_probe_cols = [col for col in df_master.columns if col.startswith("PB#")]
-    probe_cols = []
+    probe_cols = [col for col in df_master.columns if col.startswith("PB#")]
     invalid_cols = []
     
-    for col in initial_probe_cols:
+    for col in probe_cols:
         series = df_master[col].dropna()
         
-        # 1. Length Check: โพรบต้องมีข้อมูลอย่างน้อย 85% ของความยาวข้อมูลหลัก หากหยุดกลางคันจะถูกตัดออก
+        # 1. Length Check: โพรบต้องมีข้อมูลอย่างน้อย 85% 
         if len(series) < len(df_master) * 0.85:
             invalid_cols.append(col)
+            df_master[col] = np.nan
             continue
             
-        # 2. Peak Check: โพรบต้องมีอุณหภูมิถึง 400°C เป็นอย่างน้อย (บ่งบอกว่าเป็นโพรบที่อยู่ในเตา Brazing จริงๆ)
+        # 2. Peak Check: โพรบต้องมีอุณหภูมิถึง 400°C 
         if series.max() < 400.0:
             invalid_cols.append(col)
+            df_master[col] = np.nan
             continue
             
-        # 3. Erratic Jump Check: หากมีข้อมูลกระโดดผิดปกติ (เกิน 200°C ในพอยต์เดียว) เช่น สายหลวม/ขาด จะถูกตัดออก
+        # 3. Erratic Jump Check: หากมีข้อมูลกระโดดผิดปกติ (เกิน 200°C ในพอยต์เดียว)
         if (series.diff().abs() > 200.0).any():
             invalid_cols.append(col)
+            df_master[col] = np.nan
             continue
             
-        probe_cols.append(col)
-        
-    df_master.drop(columns=invalid_cols, inplace=True)
-    if not probe_cols: return None # หากไม่มีโพรบที่สมบูรณ์เลย
+    # ตรวจสอบว่ามีโพรบเหลือรอดอย่างน้อย 1 เส้นหรือไม่
+    if not [c for c in probe_cols if c not in invalid_cols]: return None 
     # =================================================================================
     
     SUSTAINED_SECONDS = 15
@@ -443,9 +447,7 @@ def process_paq_file(file_bytes, filename):
         probe_locations[f"PB#{assigned_idx}"] = f"#{assigned_idx} (°C) {clean_probe_location(clean_p.strip())}"
         assigned_idx += 1
         
-    # --- Filter Probe Locations: Keep ONLY those that have actual data ---
     probe_locations = {k: v for k, v in probe_locations.items() if k in probe_cols}
-    # For any extracted data column missing a location, assign a default label
     for col in probe_cols:
         if col not in probe_locations: probe_locations[col] = f"Channel {col.replace('PB#', '')} (Unlabeled)"
 
@@ -489,7 +491,7 @@ def process_paq_file(file_bytes, filename):
         }
         combined_text = " ".join(probe_locations.values()) + " " + " ".join(found_probes) + " " + clean_comments_text
         for pb, pat in nb2_patterns.items():
-            if pb in probe_cols: # Only process active probes
+            if pb in probe_cols:
                 match = re.search(pat, combined_text, re.IGNORECASE)
                 if match:
                     clean_str = clean_probe_location(match.group(1).strip())
@@ -538,7 +540,7 @@ def process_paq_file(file_bytes, filename):
         }
 
     return {
-        "filename": filename, "df_master": df_master, "probe_cols": probe_cols, "furnace_id": furnace_id, "furnace_variant": furnace_variant, "cfg": cfg,
+        "filename": filename, "df_master": df_master, "probe_cols": probe_cols, "invalid_cols": invalid_cols, "furnace_id": furnace_id, "furnace_variant": furnace_variant, "cfg": cfg,
         "line_speed_mpm": line_speed_mpm, "detected_start_sec": detected_start_sec, "detected_start_hhmmss": detected_start_hhmmss, "first_probe_name": first_probe_name,
         "operator_name": operator_name, "company": company, "site": site, "operator_comment": clean_comments_text, "process_settings": process_settings,
         "probe_locations": probe_locations, "probe_start_info": probe_start_info, "embedded_img": embedded_img
@@ -568,7 +570,7 @@ else:
         st.error("❌ Failed to parse valid probe temperature streams from the uploaded file.")
         st.stop()
 
-    df_m1, f_variant, cfg, zones, probe_cols = data1["df_master"], data1["furnace_variant"], data1["cfg"], data1["cfg"]["zones"], data1["probe_cols"]
+    df_m1, f_variant, cfg, zones, probe_cols, invalid_cols = data1["df_master"], data1["furnace_variant"], data1["cfg"], data1["cfg"]["zones"], data1["probe_cols"], data1["invalid_cols"]
     total_furnace_length = zones[-1]["start"] + zones[-1]["length"]
     furnace_duration_mins = total_furnace_length / data1['line_speed_mpm']
     furnace_duration_secs = int(furnace_duration_mins * 60)
@@ -648,16 +650,34 @@ else:
 
         matrix_rows = []
         for col in probe_cols:
-            r = {"Probe": col, "Dryer Max (°C)": round(dryer_max_df[col].max(), 1) if not dryer_max_df.empty else np.nan}
+            if col in invalid_cols:
+                r = {"Probe": col, "Dryer Max (°C)": "***"}
+                for dt in [cfg.get("dryer_dwell_thresh_1"), cfg.get("dryer_dwell_thresh_2")]:
+                    if dt is not None: r[f"Dryer Dwell (≥{int(dt)}°C)"] = "***"
+                if has_debinder and debinder_df is not None:
+                    d_thresh = cfg.get("debinder_dwell_thresh", 300.0) or 300.0
+                    r["Debinder Max (°C)"] = "***"
+                    r[f"Debinder Dwell (≥{int(d_thresh)}°C)"] = "***"
+                r["Brazing Max (°C)"] = "***"
+                for bt in [cfg.get(f"brazing_dwell_thresh_{i}") for i in range(1, 5)]:
+                    if bt is not None: r[f"Brazing Dwell (≥{int(bt)}°C)"] = "***"
+                matrix_rows.append(r)
+                continue
+
+            r = {"Probe": col}
+            d_max = dryer_max_df[col].max()
+            r["Dryer Max (°C)"] = f"{d_max:.1f}" if not dryer_max_df.empty and pd.notna(d_max) else "N/A"
             for dt in [cfg.get("dryer_dwell_thresh_1"), cfg.get("dryer_dwell_thresh_2")]:
                 if dt is not None: r[f"Dryer Dwell (≥{int(dt)}°C)"] = format_dwell_time((dryer_dwell_df[col] >= dt).sum()) if not dryer_dwell_df.empty else "00:00:00"
                 
             if has_debinder and debinder_df is not None:
                 d_thresh = cfg.get("debinder_dwell_thresh", 300.0) or 300.0
-                r["Debinder Max (°C)"] = round(debinder_df[col].max(), 1) if not debinder_df.empty else np.nan
+                db_max = debinder_df[col].max()
+                r["Debinder Max (°C)"] = f"{db_max:.1f}" if not debinder_df.empty and pd.notna(db_max) else "N/A"
                 r[f"Debinder Dwell (≥{int(d_thresh)}°C)"] = format_dwell_time((debinder_df[col] >= d_thresh).sum()) if not debinder_df.empty else "00:00:00"
                 
-            r["Brazing Max (°C)"] = round(brazing_df[col].max(), 1) if not brazing_df.empty else np.nan
+            bz_max = brazing_df[col].max()
+            r["Brazing Max (°C)"] = f"{bz_max:.1f}" if not brazing_df.empty and pd.notna(bz_max) else "N/A"
             for bt in [cfg.get(f"brazing_dwell_thresh_{i}") for i in range(1, 5)]:
                 if bt is not None: r[f"Brazing Dwell (≥{int(bt)}°C)"] = format_dwell_time((brazing_df[col] >= bt).sum()) if not brazing_df.empty else "00:00:00"
             matrix_rows.append(r)
@@ -690,9 +710,8 @@ else:
         check_dryer = st.checkbox("🔍 ตรวจสอบเกณฑ์ Dryer Max Temp & Dwell Time / Evaluate Dryer Max & Dwell", value=False)
 
         df_matrix = pd.DataFrame(matrix_rows)
-        format_dict = {col: "{:.1f}" for col in df_matrix.columns if "Max (°C)" in col}
         matrix_placeholder.dataframe(
-            df_matrix.style.apply(style_inspection_matrix, variant=f_variant, check_dryer_max=check_dryer, axis=1).format(format_dict, na_rep="N/A"), 
+            df_matrix.style.apply(style_inspection_matrix, variant=f_variant, check_dryer_max=check_dryer, axis=1), 
             use_container_width=True, hide_index=True
         )
         
@@ -702,19 +721,19 @@ else:
         
         for r in matrix_rows:
             probe = r["Probe"]
+            if probe in invalid_cols: continue # Ignore failing logic for dropped/erratic probes
             for k, v in r.items():
                 if k == "Probe": continue
                 if not check_dryer and ("Dryer Max" in k or "Dryer Dwell" in k): continue 
                 
                 rule = val_rules.get(k)
-                
                 if f_variant == "NB1 (CDS/KN9/12SHP)" and k == "Brazing Dwell (≥577°C)":
                     if probe in ["PB#1", "PB#5"]: rule = (240, 465)
                     else: rule = (120, 465)
                 
                 if not rule: continue
                 is_fail = False
-                if pd.isna(v) or v == "00:00:00" or v == "" or v == 0:
+                if pd.isna(v) or v == "00:00:00" or v == "" or v == 0 or v == "N/A":
                     if rule[0] > 0: is_fail = True
                 else:
                     min_v, max_v = rule
@@ -790,26 +809,37 @@ else:
             r = {"Group": z["group"], "Zone #": z["num"], "Zone Name": z["name"], "Start (m)": z["start"], "End (m)": round(z["start"] + z["length"], 2)}
             if not z_df.empty and probe_cols:
                 max_s = z_df[probe_cols].max()
-                for col in probe_cols: r[col] = max_s[col]
-                r["Zone Peak (°C)"] = max_s.max()
-                r["Hot Probe"] = max_s.idxmax()
+                for col in probe_cols: 
+                    r[col] = "***" if col in invalid_cols else max_s[col]
+                
+                valid_max = [max_s[c] for c in probe_cols if c not in invalid_cols and pd.notna(max_s[c])]
+                r["Zone Peak (°C)"] = max(valid_max) if valid_max else np.nan
+                r["Hot Probe"] = max_s[[c for c in probe_cols if c not in invalid_cols]].idxmax() if valid_max else "-"
             else:
-                for col in probe_cols: r[col] = np.nan
+                for col in probe_cols: r[col] = "***" if col in invalid_cols else np.nan
                 r["Zone Peak (°C)"], r["Hot Probe"] = np.nan, "-"
             zone_max_records.append(r)
         df_zone_summary = pd.DataFrame(zone_max_records)
-        try: st.dataframe(df_zone_summary.style.background_gradient(cmap="OrRd", subset=probe_cols + ["Zone Peak (°C)"]).format({col: "{:.2f}" for col in probe_cols + ["Zone Peak (°C)"]}), use_container_width=True)
+        valid_cols_for_bg = [c for c in probe_cols if c not in invalid_cols]
+        try: st.dataframe(df_zone_summary.style.background_gradient(cmap="OrRd", subset=valid_cols_for_bg + ["Zone Peak (°C)"]).format({col: "{:.2f}" for col in valid_cols_for_bg + ["Zone Peak (°C)"]}), use_container_width=True)
         except: st.dataframe(df_zone_summary, use_container_width=True)
 
         st.markdown("---")
         st.subheader("⏱️ Entry Alignment (60°C)")
-        shift_rows = [{"Probe": col, "Start Time (HH:MM:SS)": info["Start_HHMMSS"], "Start Sec": f"{info['Start_Sec']}s", "Lag Time vs First": f"+{info['Offset_Sec']}s" if info['Offset_Sec'] > 0 else "0s (Lead)", "Distance Shift": f"+{info['Offset_Meters']:.2f} m" if info['Offset_Meters'] > 0 else "0.00 m (Lead)", "Status": "🏆 First (Lead)" if info["Is_First"] else f"+{info['Offset_Meters']:.2f} m lag"} for col, info in data1["probe_start_info"].items()]
+        shift_rows = []
+        for col, info in data1["probe_start_info"].items():
+            if col in invalid_cols:
+                shift_rows.append({"Probe": col, "Start Time (HH:MM:SS)": "***", "Start Sec": "***", "Lag Time vs First": "***", "Distance Shift": "***", "Status": "*** (Inactive)"})
+            else:
+                shift_rows.append({"Probe": col, "Start Time (HH:MM:SS)": info["Start_HHMMSS"], "Start Sec": f"{info['Start_Sec']}s", "Lag Time vs First": f"+{info['Offset_Sec']}s" if info['Offset_Sec'] > 0 else "0s (Lead)", "Distance Shift": f"+{info['Offset_Meters']:.2f} m" if info['Offset_Meters'] > 0 else "0.00 m (Lead)", "Status": "🏆 First (Lead)" if info["Is_First"] else f"+{info['Offset_Meters']:.2f} m lag"})
         st.dataframe(pd.DataFrame(shift_rows), use_container_width=True, hide_index=True)
 
     with tabs[2]:
         st.subheader("📈 Temperature Distribution Boxplot by Probe")
         fig_box = go.Figure()
-        for idx, col in enumerate(probe_cols): fig_box.add_trace(go.Box(y=df_m1[col].dropna(), name=col, boxpoints='outliers', marker_color=PROBE_COLORS.get(col)))
+        for idx, col in enumerate(probe_cols): 
+            if col not in invalid_cols:
+                fig_box.add_trace(go.Box(y=df_m1[col].dropna(), name=col, boxpoints='outliers', marker_color=PROBE_COLORS.get(col)))
         fig_box.update_layout(title="Temperature Distribution Across Probes", yaxis_title="Temperature (°C)", template="plotly_white", height=500)
         st.plotly_chart(fig_box, use_container_width=True)
 
@@ -819,7 +849,7 @@ else:
         for z in zones:
             df_z = df_m1[(df_m1["Distance_Meters"] >= z["start"]) & (df_m1["Distance_Meters"] <= z["start"] + z["length"])]
             if not df_z.empty:
-                z_vals = df_z[probe_cols].values.flatten()
+                z_vals = df_z[[c for c in probe_cols if c not in invalid_cols]].values.flatten()
                 z_vals = z_vals[~np.isnan(z_vals)]
                 if len(z_vals) > 0: stats_list.append({"Zone #": z["num"], "Zone Name": z["name"], "Group": z["group"], "Avg Temp (°C)": round(np.mean(z_vals), 2), "Std Dev (°C)": round(np.std(z_vals, ddof=1), 2), "Min Temp (°C)": round(np.min(z_vals), 2), "Max Temp (°C)": round(np.max(z_vals), 2), "Data Points": len(z_vals) })
         st.dataframe(pd.DataFrame(stats_list), use_container_width=True, hide_index=True)
@@ -831,8 +861,12 @@ else:
             ch = f"PB#{pb.replace('PB','')}"
             if ch in probe_cols:
                 row_data[f"{pb}_Location"] = data1["probe_locations"].get(ch, "Unlabeled")
-                row_data[f"{pb}_Start_Time"] = data1["probe_start_info"].get(ch, {}).get("Start_HHMMSS", "00:00:00")
-                row_data[f"{pb}_Lag_Sec"] = data1["probe_start_info"].get(ch, {}).get("Offset_Sec", 0)
+                if ch in invalid_cols:
+                    row_data[f"{pb}_Start_Time"] = "***"
+                    row_data[f"{pb}_Lag_Sec"] = "***"
+                else:
+                    row_data[f"{pb}_Start_Time"] = data1["probe_start_info"].get(ch, {}).get("Start_HHMMSS", "00:00:00")
+                    row_data[f"{pb}_Lag_Sec"] = data1["probe_start_info"].get(ch, {}).get("Offset_Sec", 0)
             else:
                 row_data[f"{pb}_Location"] = "No Data"
                 row_data[f"{pb}_Start_Time"] = "N/A"
