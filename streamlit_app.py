@@ -576,6 +576,9 @@ else:
         elif "NB2" in f_variant:
             dryer_df = df_m1[(process_time >= 0) & (process_time <= 270)]
             debinder_df = None
+        elif "NB3 (KE8 : M2/EVO)" in f_variant:
+            dryer_df = df_m1[(process_time >= 0) & (process_time <= 272)]
+            debinder_df = df_m1[(df_m1["Distance_Meters"] >= debinder_info["Start (m)"]) & (df_m1["Distance_Meters"] <= debinder_info["End (m)"])] if debinder_info else None
         else:
             dryer_df = df_m1[(df_m1["Distance_Meters"] >= dryer_info["Start (m)"]) & (df_m1["Distance_Meters"] <= dryer_info["End (m)"])]
             debinder_df = df_m1[(df_m1["Distance_Meters"] >= debinder_info["Start (m)"]) & (df_m1["Distance_Meters"] <= debinder_info["End (m)"])] if debinder_info else None
