@@ -313,8 +313,36 @@ def process_paq_file(file_bytes, filename):
     df_master.insert(1, "Time_Stamp", base_date + pd.to_timedelta(df_master["Time_Seconds"], unit="s"))
     df_master.insert(2, "Time_HHMMSS", df_master["Time_Stamp"].dt.strftime('%H:%M:%S'))
 
-    # Only include probe columns that were successfully extracted and have data
-    probe_cols = [col for col in df_master.columns if col.startswith("PB#")]
+    # =================================================================================
+    # --- AUTO-FILTERING: REMOVE ERRATIC OR INCOMPLETE PROBES ---
+    # =================================================================================
+    initial_probe_cols = [col for col in df_master.columns if col.startswith("PB#")]
+    probe_cols = []
+    invalid_cols = []
+    
+    for col in initial_probe_cols:
+        series = df_master[col].dropna()
+        
+        # 1. Length Check: โพรบต้องมีข้อมูลอย่างน้อย 85% ของความยาวข้อมูลหลัก หากหยุดกลางคันจะถูกตัดออก
+        if len(series) < len(df_master) * 0.85:
+            invalid_cols.append(col)
+            continue
+            
+        # 2. Peak Check: โพรบต้องมีอุณหภูมิถึง 400°C เป็นอย่างน้อย (บ่งบอกว่าเป็นโพรบที่อยู่ในเตา Brazing จริงๆ)
+        if series.max() < 400.0:
+            invalid_cols.append(col)
+            continue
+            
+        # 3. Erratic Jump Check: หากมีข้อมูลกระโดดผิดปกติ (เกิน 200°C ในพอยต์เดียว) เช่น สายหลวม/ขาด จะถูกตัดออก
+        if (series.diff().abs() > 200.0).any():
+            invalid_cols.append(col)
+            continue
+            
+        probe_cols.append(col)
+        
+    df_master.drop(columns=invalid_cols, inplace=True)
+    if not probe_cols: return None # หากไม่มีโพรบที่สมบูรณ์เลย
+    # =================================================================================
     
     SUSTAINED_SECONDS = 15
     probe_start_secs = {}
