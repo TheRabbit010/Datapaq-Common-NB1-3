@@ -284,12 +284,23 @@ def process_paq_file(file_bytes, filename):
             for m in ascii_matches: raw_texts.append(m.decode('ascii', errors='ignore').strip())
         except: continue
 
-    # 2. BUILD CHANNEL MAPPING 
+    # 2. BUILD CHANNEL MAPPING & GET LOGGER EXPECTED CHANNELS
     channel_mapping = {}
+    num_logger_channels = 0
     for s in raw_texts:
         matches = re.findall(r'#probe\s+number\s+#(\d+)\s*=\s*(\d+)', s, re.IGNORECASE)
         for m in matches:
             channel_mapping[int(m[0])] = int(m[1])
+            
+        if num_logger_channels == 0:
+            m_ch = re.search(r'#number of channels\s*=\s*(\d+)', s, re.IGNORECASE)
+            if m_ch:
+                num_logger_channels = int(m_ch.group(1))
+
+    if num_logger_channels == 0:
+        num_logger_channels = max(channel_mapping.values()) if channel_mapping else 8
+        
+    num_logger_channels = min(num_logger_channels, 8) # Fallback Max 8
 
     # 3. EXTRACT PROBE DATA STREAMS
     probe_streams = [s for s in ole.listdir() if len(s) >= 4 and s[0] == 'Paqfiles' and s[2] == 'ProbeResults']
@@ -307,9 +318,9 @@ def process_paq_file(file_bytes, filename):
             series = extract_probe_series_autonomously(d)
             if series: all_probes[col_name] = series
 
-    if not all_probes: return None
+    max_samples = max(len(v) for v in all_probes.values()) if all_probes else 0
+    if max_samples == 0: return None
 
-    max_samples = max(len(v) for v in all_probes.values())
     aligned_probes = {k: (v + [np.nan] * (max_samples - len(v)) if len(v) < max_samples else v) for k, v in all_probes.items()}
     df_master = pd.DataFrame(aligned_probes)
     df_master.insert(0, "Time_Seconds", range(len(df_master)))
@@ -317,15 +328,25 @@ def process_paq_file(file_bytes, filename):
     df_master.insert(1, "Time_Stamp", base_date + pd.to_timedelta(df_master["Time_Seconds"], unit="s"))
     df_master.insert(2, "Time_HHMMSS", df_master["Time_Stamp"].dt.strftime('%H:%M:%S'))
 
+    # Ensure all expected channels from Logger Metadata exist in df_master
+    expected_cols = [f"PB#{i}" for i in range(1, num_logger_channels + 1)]
+    for col in expected_cols:
+        if col not in df_master.columns:
+            df_master[col] = np.nan
+
     # =================================================================================
     # --- AUTO-FILTERING: REMOVE ERRATIC OR INCOMPLETE PROBES (REPLACE WITH NaN) ---
     # =================================================================================
-    probe_cols = [col for col in df_master.columns if col.startswith("PB#")]
+    probe_cols = expected_cols
     invalid_cols = []
     
     for col in probe_cols:
         series = df_master[col].dropna()
         
+        if len(series) == 0:
+            invalid_cols.append(col)
+            continue
+            
         # 1. Length Check: โพรบต้องมีข้อมูลอย่างน้อย 85% 
         if len(series) < len(df_master) * 0.85:
             invalid_cols.append(col)
@@ -359,7 +380,12 @@ def process_paq_file(file_bytes, filename):
 
     valid_starts = [sec for sec in probe_start_secs.values() if sec > 0]
     detected_start_sec = min(valid_starts) if valid_starts else 0
-    first_probe_name = [k for k, v in probe_start_secs.items() if v == detected_start_sec][0] if valid_starts else probe_cols[0]
+    if valid_starts:
+        first_probe_name = [k for k, v in probe_start_secs.items() if v == detected_start_sec][0]
+    else:
+        valid_p = [c for c in probe_cols if c not in invalid_cols]
+        first_probe_name = valid_p[0] if valid_p else probe_cols[0]
+
     detected_start_hhmmss = df_master[df_master["Time_Seconds"] == detected_start_sec].iloc[0]["Time_HHMMSS"]
 
     # 4. PARSE METADATA & RECIPES
@@ -792,6 +818,9 @@ else:
             st.subheader("Individually Aligned Probe Chart (Own 60°C Entry)")
             fig2 = go.Figure()
             for col in probe_cols:
+                if col in invalid_cols:
+                    fig2.add_trace(go.Scatter(x=[np.nan], y=[np.nan], mode="lines", name=f"{col} (Inactive)", line=dict(color=PROBE_COLORS.get(col))))
+                    continue
                 offset_m = data1["probe_start_info"][col]["Offset_Meters"]
                 indiv_hover = np.stack((df_m1["Time_HHMMSS"], df_m1["Time_Seconds"], np.full(len(df_m1), offset_m)), axis=-1)
                 fig2.add_trace(go.Scatter(x=df_m1[f"Distance_{col}"], y=df_m1[col], mode="lines", name=f"{col} (+{offset_m:.2f}m)" if offset_m > 0 else f"{col} (Lead)", customdata=indiv_hover, hovertemplate="%{fullData.name}: %{y:.1f} °C<br>Indiv Dist: %{x:.2f} m<br>Time: %{customdata[0]}", line=dict(color=PROBE_COLORS.get(col))))
