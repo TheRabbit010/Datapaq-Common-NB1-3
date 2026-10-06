@@ -253,45 +253,8 @@ def clean_probe_location(loc_desc):
 def process_paq_file(file_bytes, filename):
     ole_bytes = io.BytesIO(file_bytes)
     ole = olefile.OleFileIO(ole_bytes)
-    probe_streams = [s for s in ole.listdir() if len(s) >= 4 and s[0] == 'Paqfiles' and s[2] == 'ProbeResults']
-    probe_streams = sorted(probe_streams, key=lambda x: x[-1])
-
-    all_probes = {}
-    for stream_path in probe_streams:
-        stream_name = "/".join(stream_path)
-        probe_folder = stream_path[-1]
-        probe_num = int(''.join(filter(str.isdigit, probe_folder))) + 1 if any(c.isdigit() for c in probe_folder) else len(all_probes) + 1
-        col_name = f"PB#{probe_num}"
-        d = decompress_stream(ole, stream_name)
-        if d:
-            series = extract_probe_series_autonomously(d)
-            if series: all_probes[col_name] = series
-
-    if not all_probes: return None
-
-    max_samples = max(len(v) for v in all_probes.values())
-    aligned_probes = {k: (v + [np.nan] * (max_samples - len(v)) if len(v) < max_samples else v) for k, v in all_probes.items()}
-    df_master = pd.DataFrame(aligned_probes)
-    df_master.insert(0, "Time_Seconds", range(len(df_master)))
-    base_date = pd.Timestamp("1970-01-01 00:00:00")
-    df_master.insert(1, "Time_Stamp", base_date + pd.to_timedelta(df_master["Time_Seconds"], unit="s"))
-    df_master.insert(2, "Time_HHMMSS", df_master["Time_Stamp"].dt.strftime('%H:%M:%S'))
-
-    probe_cols = [col for col in df_master.columns if col.startswith("PB#")]
-    SUSTAINED_SECONDS = 15
-    probe_start_secs = {}
-    for col in probe_cols:
-        is_p60 = (df_master[col] >= 60.0)
-        valid_p_mask = is_p60.copy()
-        for i in range(1, SUSTAINED_SECONDS):
-            valid_p_mask = valid_p_mask & is_p60.shift(-i, fill_value=False)
-        probe_start_secs[col] = int(df_master[valid_p_mask].iloc[0]["Time_Seconds"]) if valid_p_mask.any() else 0
-
-    valid_starts = [sec for sec in probe_start_secs.values() if sec > 0]
-    detected_start_sec = min(valid_starts) if valid_starts else 0
-    first_probe_name = [k for k, v in probe_start_secs.items() if v == detected_start_sec][0] if valid_starts else probe_cols[0]
-    detected_start_hhmmss = df_master[df_master["Time_Seconds"] == detected_start_sec].iloc[0]["Time_HHMMSS"]
-
+    
+    # 1. EXTRACT RAW TEXT FIRST (To find channel mapping)
     raw_texts = []
     embedded_img = None
     for stream_path in ole.listdir():
@@ -316,6 +279,58 @@ def process_paq_file(file_bytes, filename):
             for m in ascii_matches: raw_texts.append(m.decode('ascii', errors='ignore').strip())
         except: continue
 
+    # 2. BUILD CHANNEL MAPPING (Map internal stream index to physical probe channel)
+    channel_mapping = {}
+    for s in raw_texts:
+        matches = re.findall(r'#probe\s+number\s+#(\d+)\s*=\s*(\d+)', s, re.IGNORECASE)
+        for m in matches:
+            channel_mapping[int(m[0])] = int(m[1])
+
+    # 3. EXTRACT PROBE DATA STREAMS
+    probe_streams = [s for s in ole.listdir() if len(s) >= 4 and s[0] == 'Paqfiles' and s[2] == 'ProbeResults']
+    probe_streams = sorted(probe_streams, key=lambda x: x[-1])
+
+    all_probes = {}
+    for idx, stream_path in enumerate(probe_streams):
+        stream_name = "/".join(stream_path)
+        internal_idx = idx + 1
+        # Use mapping if found, else default to internal index
+        physical_ch = channel_mapping.get(internal_idx, internal_idx)
+        col_name = f"PB#{physical_ch}"
+        
+        d = decompress_stream(ole, stream_name)
+        if d:
+            series = extract_probe_series_autonomously(d)
+            if series: all_probes[col_name] = series
+
+    if not all_probes: return None
+
+    max_samples = max(len(v) for v in all_probes.values())
+    aligned_probes = {k: (v + [np.nan] * (max_samples - len(v)) if len(v) < max_samples else v) for k, v in all_probes.items()}
+    df_master = pd.DataFrame(aligned_probes)
+    df_master.insert(0, "Time_Seconds", range(len(df_master)))
+    base_date = pd.Timestamp("1970-01-01 00:00:00")
+    df_master.insert(1, "Time_Stamp", base_date + pd.to_timedelta(df_master["Time_Seconds"], unit="s"))
+    df_master.insert(2, "Time_HHMMSS", df_master["Time_Stamp"].dt.strftime('%H:%M:%S'))
+
+    # Only include probe columns that were successfully extracted and have data
+    probe_cols = [col for col in df_master.columns if col.startswith("PB#")]
+    
+    SUSTAINED_SECONDS = 15
+    probe_start_secs = {}
+    for col in probe_cols:
+        is_p60 = (df_master[col] >= 60.0)
+        valid_p_mask = is_p60.copy()
+        for i in range(1, SUSTAINED_SECONDS):
+            valid_p_mask = valid_p_mask & is_p60.shift(-i, fill_value=False)
+        probe_start_secs[col] = int(df_master[valid_p_mask].iloc[0]["Time_Seconds"]) if valid_p_mask.any() else 0
+
+    valid_starts = [sec for sec in probe_start_secs.values() if sec > 0]
+    detected_start_sec = min(valid_starts) if valid_starts else 0
+    first_probe_name = [k for k, v in probe_start_secs.items() if v == detected_start_sec][0] if valid_starts else probe_cols[0]
+    detected_start_hhmmss = df_master[df_master["Time_Seconds"] == detected_start_sec].iloc[0]["Time_HHMMSS"]
+
+    # 4. PARSE METADATA & RECIPES
     found_comments, found_recipes, found_probes = [], [], []
     for s in raw_texts:
         is_recipe = re.search(r'\b(During\s*datapaq|O2\s*Exit|ppm|CV\s*speed|mm/min|N2\s*Flow|WJ\s*Flow|Top\s*Temp|Bot\s*temp|Temp\s*Top|Temp\s*Bot|SP1|SP2\s*==>|Braze[d]?\s*Temp|BrazeTemp|Brazed|Brazing|Hz)\b|(Top\s*:|Bot\s*:)', s, re.IGNORECASE)
@@ -400,6 +415,9 @@ def process_paq_file(file_bytes, filename):
         probe_locations[f"PB#{assigned_idx}"] = f"#{assigned_idx} (°C) {clean_probe_location(clean_p.strip())}"
         assigned_idx += 1
         
+    # --- Filter Probe Locations: Keep ONLY those that have actual data ---
+    probe_locations = {k: v for k, v in probe_locations.items() if k in probe_cols}
+    # For any extracted data column missing a location, assign a default label
     for col in probe_cols:
         if col not in probe_locations: probe_locations[col] = f"Channel {col.replace('PB#', '')} (Unlabeled)"
 
@@ -443,21 +461,26 @@ def process_paq_file(file_bytes, filename):
         }
         combined_text = " ".join(probe_locations.values()) + " " + " ".join(found_probes) + " " + clean_comments_text
         for pb, pat in nb2_patterns.items():
-            match = re.search(pat, combined_text, re.IGNORECASE)
-            if match:
-                clean_str = clean_probe_location(match.group(1).strip())
-                clean_str = re.sub(r'\.$', '', clean_str)
-                probe_locations[pb] = f"#{pb.replace('PB#','')} (°C) {clean_str}"
+            if pb in probe_cols: # Only process active probes
+                match = re.search(pat, combined_text, re.IGNORECASE)
+                if match:
+                    clean_str = clean_probe_location(match.group(1).strip())
+                    clean_str = re.sub(r'\.$', '', clean_str)
+                    probe_locations[pb] = f"#{pb.replace('PB#','')} (°C) {clean_str}"
                 
     elif "NB1 (CDS" in furnace_variant:
-        probe_locations["PB#1"] = "#1 (°C) Bottom - Center core / inside T32."
-        probe_locations["PB#2"] = "#2 (°C) Bottom - Bottom left / inside T25 / far mani manifold 7mm."
-        probe_locations["PB#3"] = "#3 (°C) Bottom - Top left / insideT1 / far manifold 7mm."
-        probe_locations["PB#4"] = "#4 (°C) Bottom - Top right / drill inside block 3mm. / far cover5mm"
-        probe_locations["PB#5"] = "#5 (°C) Top - Center core / inside T32."
-        probe_locations["PB#6"] = "#6 (°C) Top - Top right / inside T25 / far mani manifold 7mm."
-        probe_locations["PB#7"] = "#7 (°C) Top - Bottom right / insideT1 / far manifold 7mm."
-        probe_locations["PB#8"] = "#8 (°C) Top - Bottom left / drill inside block 3mm. / far cover5mm"
+        default_cds = {
+            "PB#1": "#1 (°C) Bottom - Center core / inside T32.",
+            "PB#2": "#2 (°C) Bottom - Bottom left / inside T25 / far mani manifold 7mm.",
+            "PB#3": "#3 (°C) Bottom - Top left / insideT1 / far manifold 7mm.",
+            "PB#4": "#4 (°C) Bottom - Top right / drill inside block 3mm. / far cover5mm",
+            "PB#5": "#5 (°C) Top - Center core / inside T32.",
+            "PB#6": "#6 (°C) Top - Top right / inside T25 / far mani manifold 7mm.",
+            "PB#7": "#7 (°C) Top - Bottom right / insideT1 / far manifold 7mm.",
+            "PB#8": "#8 (°C) Top - Bottom left / drill inside block 3mm. / far cover5mm"
+        }
+        for k, v in default_cds.items():
+            if k in probe_cols: probe_locations[k] = v
 
     base_cfg = FURNACE_CONFIGS.get(furnace_id, FURNACE_CONFIGS["NB3"])
     cfg = dict(base_cfg)
@@ -536,8 +559,7 @@ else:
         
         base_date = pd.Timestamp("1970-01-01 00:00:00")
         
-        # --- เพิ่มการจำกัดมุมมองแกน X ให้แสดงแค่ความยาวของเตา (ตัดส่วนหางที่เรียบยาวๆ ออกไป) ---
-        d_max_view = total_furnace_length + 1.0  # เพิ่ม Buffer 1 เมตรจากทางออก
+        d_max_view = total_furnace_length + 1.0 
         t_max_view = data1['detected_start_sec'] + (d_max_view / data1['line_speed_mpm'] * 60)
         
         t_min = df_m1["Time_Seconds"].min()
@@ -545,7 +567,6 @@ else:
         
         d_min = df_m1["Distance_Meters"].min()
         d_max = min(df_m1["Distance_Meters"].max(), d_max_view)
-        # -----------------------------------------------------------------------------------
 
         custom_hover1 = np.stack((df_m1["Time_HHMMSS"], df_m1["Time_Seconds"], df_m1["Distance_Meters"]), axis=-1)
         for col in probe_cols:
@@ -578,7 +599,6 @@ else:
 
         process_time = df_m1["Time_Seconds"] - data1["detected_start_sec"]
         
-        # --- เปลี่ยนแปลงการระบุช่วงเวลาสำหรับ Dryer ตรงนี้ ---
         if "NB1" in f_variant:
             dryer_max_df = df_m1[(process_time >= 0) & (process_time <= 300)]
             dryer_dwell_df = dryer_max_df.copy()
@@ -588,7 +608,6 @@ else:
             dryer_dwell_df = dryer_max_df.copy()
             debinder_df = None
         elif f_variant == "NB3 (KE8 : M2/EVO)":
-            # Dryer Max Temp และ Dryer Dwell Time คิดที่ช่วงเวลา 00:00:00 ถึง 00:04:30 (270 วินาที)
             dryer_max_df = df_m1[(process_time >= 0) & (process_time <= 270)]
             dryer_dwell_df = dryer_max_df.copy()
             debinder_df = df_m1[(df_m1["Distance_Meters"] >= debinder_info["Start (m)"]) & (df_m1["Distance_Meters"] <= debinder_info["End (m)"])] if debinder_info else None
@@ -601,9 +620,7 @@ else:
 
         matrix_rows = []
         for col in probe_cols:
-            # ใช้ dryer_max_df สำหรับหาค่า Max
             r = {"Probe": col, "Dryer Max (°C)": round(dryer_max_df[col].max(), 1) if not dryer_max_df.empty else np.nan}
-            # ใช้ dryer_dwell_df สำหรับคำนวณ Dwell time
             for dt in [cfg.get("dryer_dwell_thresh_1"), cfg.get("dryer_dwell_thresh_2")]:
                 if dt is not None: r[f"Dryer Dwell (≥{int(dt)}°C)"] = format_dwell_time((dryer_dwell_df[col] >= dt).sum()) if not dryer_dwell_df.empty else "00:00:00"
                 
@@ -659,16 +676,13 @@ else:
             probe = r["Probe"]
             for k, v in r.items():
                 if k == "Probe": continue
-                
                 if not check_dryer and ("Dryer Max" in k or "Dryer Dwell" in k): continue 
                 
                 rule = val_rules.get(k)
                 
                 if f_variant == "NB1 (CDS/KN9/12SHP)" and k == "Brazing Dwell (≥577°C)":
-                    if probe in ["PB#1", "PB#5"]:
-                        rule = (240, 465)
-                    else:
-                        rule = (120, 465)
+                    if probe in ["PB#1", "PB#5"]: rule = (240, 465)
+                    else: rule = (120, 465)
                 
                 if not rule: continue
                 is_fail = False
@@ -787,9 +801,15 @@ else:
         row_data = {"File_Name": data1["filename"], "Furnace_Type": f_variant, "Operator_Name": data1["operator_name"], "Company": data1["company"], "Site": data1["site"], "Entrance_Time": data1["detected_start_hhmmss"], "Line_Speed_MPM": data1["line_speed_mpm"]}
         for pb in [f"PB{i}" for i in range(1, 9)]:
             ch = f"PB#{pb.replace('PB','')}"
-            row_data[f"{pb}_Location"] = data1["probe_locations"].get(ch, "Unlabeled")
-            row_data[f"{pb}_Start_Time"] = data1["probe_start_info"].get(ch, {}).get("Start_HHMMSS", "00:00:00")
-            row_data[f"{pb}_Lag_Sec"] = data1["probe_start_info"].get(ch, {}).get("Offset_Sec", 0)
+            if ch in probe_cols:
+                row_data[f"{pb}_Location"] = data1["probe_locations"].get(ch, "Unlabeled")
+                row_data[f"{pb}_Start_Time"] = data1["probe_start_info"].get(ch, {}).get("Start_HHMMSS", "00:00:00")
+                row_data[f"{pb}_Lag_Sec"] = data1["probe_start_info"].get(ch, {}).get("Offset_Sec", 0)
+            else:
+                row_data[f"{pb}_Location"] = "No Data"
+                row_data[f"{pb}_Start_Time"] = "N/A"
+                row_data[f"{pb}_Lag_Sec"] = ""
+                
         df_single_row = pd.DataFrame([row_data])
         st.dataframe(df_single_row, use_container_width=True)
 
@@ -849,12 +869,10 @@ else:
                     if col in df_m2.columns: 
                         fig_comp.add_trace(go.Scatter(x=df_m2["Distance_Meters"], y=df_m2[col], mode="lines", name=f"F2: {col}", customdata=custom_hover2, hovertemplate="F2 %{fullData.name}: %{y:.1f} °C<br>Time: %{customdata[0]}<br>Dist: %{x:.2f} m", line=dict(dash='dash', color=PROBE_COLORS.get(col), width=1.5)))
                 
-                # --- เพิ่มการจำกัดมุมมองแกน X ให้แสดงแค่ความยาวของเตาสำหรับกราฟเปรียบเทียบ ---
                 d_max_view = total_furnace_length + 1.0
                 d_min_comp = min(df_m1["Distance_Meters"].min(), df_m2["Distance_Meters"].min())
                 d_max_actual = max(df_m1["Distance_Meters"].max(), df_m2["Distance_Meters"].max())
                 d_max_comp = min(d_max_actual, d_max_view)
-                # -------------------------------------------------------------------------
 
                 fig_comp.update_layout(
                     title=f"COMPARISON (Aligned by Furnace Entry): {data1['filename']} vs {data2['filename']}", 
