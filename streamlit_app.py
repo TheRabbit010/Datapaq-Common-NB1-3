@@ -226,7 +226,7 @@ def parse_operator_and_metadata(comments_list):
     clean_notes = re.sub(r'(?i)https?://[^\s]*', '', clean_notes)
     clean_notes = re.sub(r'(?i)\\\\[a-z0-9_]+\\[^\s]*', '', clean_notes)
     
-    # Allow % and * symbols for percentages and probe notes
+    # อนุญาตให้เครื่องหมาย % และ * คงอยู่ได้
     clean_notes = re.sub(r'[^\w\s\.\,\-\/\(\)\=\+:\%\*]', ' ', clean_notes)
     clean_notes = re.sub(r'\b[A-Z0-9]{15,}\b', '', clean_notes) 
     
@@ -234,13 +234,21 @@ def parse_operator_and_metadata(comments_list):
         if token != "N/A":
             clean_notes = re.sub(rf'\b{re.escape(token)}\b', '', clean_notes, flags=re.IGNORECASE)
             
-    # Extract locations without deleting the probe note from clean_notes
+    # ดึงรายชื่อ Probe Locations ออกมาก่อนที่จะตัดข้อความ
     extra_probes = []
     probe_matches = re.finditer(r'(?:Probe\s*no\.?\s*[1-8]|PB#[1-8]|#[1-8]\s*\().*?(?=\Z|\bProbe\s*no|\bPB#|#[1-8]\s*\()', clean_notes, flags=re.IGNORECASE)
     for m in probe_matches:
         p_text = m.group(0).strip()
         if re.search(r'(core|bottom|top|left|right|manifold|pipe|drill)', p_text, re.IGNORECASE):
             extra_probes.append(p_text)
+            
+    # ตัดข้อความ Physical probe mapping ออกจาก Notes เพื่อให้ดูสะอาด
+    loc_cutoff = re.search(r'\b(Bottom\s*-\s*(Top|Bottom|Center|Left|Right)|Top\s*-\s*(Top|Bottom|Center|Left|Right)|Middle\s*left|Middle\s*right|Right\s*core|Left\s*core|NB\s*\d\s*with\s*Debinder|Dryer\s*Z\s*1)\b', clean_notes, re.IGNORECASE)
+    if loc_cutoff:
+        clean_notes = clean_notes[:loc_cutoff.start()]
+        
+    # ตัดขยะภาษาต่างดาวตัวอื่นๆ ที่เหลือรอด
+    clean_notes = re.sub(r'\b(hzgxdvN|ljjSQP|xwTLL|nif\s*jgni)\b', '', clean_notes, flags=re.IGNORECASE)
     
     clean_notes = re.sub(r'\s:\s(?=[A-Za-z])', ' ', clean_notes)
     clean_notes = re.sub(r'\s{2,}', ' ', clean_notes)
@@ -391,6 +399,11 @@ def process_paq_file(file_bytes, filename):
     found_comments, found_recipes, found_probes = [], [], []
     for s in raw_texts:
         is_recipe = re.search(r'\b(During\s*datapaq|O2\s*Exit|ppm|CV\s*speed|mm/min|N2\s*Flow|WJ\s*Flow|Top\s*Temp|Bot\s*temp|Temp\s*Top|Temp\s*Bot|SP1|SP2\s*==>|Braze[d]?\s*Temp|BrazeTemp|Brazed|Brazing|Hz)\b|(Top\s*:|Bot\s*:)', s, re.IGNORECASE)
+        
+        # Intercept and force to notes if it is a flux/loading instruction disguised as a recipe
+        if is_recipe and re.search(r'(apply\s*flux|paste\s*flux|nocolok|loading\s*double|gap\s*\d+mm)', s, re.IGNORECASE) and not re.search(r'(during\s*datapaq|WJ\s*Flow)', s, re.IGNORECASE):
+            is_recipe = False
+            
         if is_recipe:
             s_rec = s
             # FIND "during datapaq" TO AVOID GIBBERISH AT THE START
