@@ -147,19 +147,16 @@ def extract_probe_series_autonomously(decomp_bytes):
         except: continue
         clean_vals, glitch_count = [], 0
         for v in vals:
-            # ขยายช่วงการอ่านอุณหภูมิ เผื่อสายหลวมมี Noise สวิง
             if isinstance(v, float) and -50.0 <= v <= 1000.0:
                 clean_vals.append(v)
                 glitch_count = 0
             else:
                 glitch_count += 1
                 if len(clean_vals) > 500:
-                    # ยอมรับ Noise ต่อเนื่องได้มากขึ้นก่อนจะตัดกราฟทิ้ง (เพิ่มจาก 5 เป็น 30)
                     if glitch_count <= 30: 
                         clean_vals.append(clean_vals[-1] if clean_vals else 0.0)
                     else: break
                 elif glitch_count > 3: clean_vals = []
-        # ลดเงื่อนไขอุณหภูมิ Peak สำหรับการดึงข้อมูล (เผื่อสายหลวมอ่านได้ต่ำ)
         if len(clean_vals) > len(best_series) and max(clean_vals) > 100.0:
             best_series = clean_vals
     return best_series
@@ -366,7 +363,8 @@ def process_paq_file(file_bytes, filename):
             df_master[col] = np.nan
             continue
             
-        # 3. Erratic Jump Check: ปิดการทำงานส่วนนี้ เพื่อให้แสดงเส้นกราฟได้แม้ค่าจะกระโดดไปมา
+    # ตรวจสอบว่ามีโพรบเหลือรอดอย่างน้อย 1 เส้นหรือไม่
+    if not [c for c in probe_cols if c not in invalid_cols]: return None 
     # =================================================================================
     
     SUSTAINED_SECONDS = 15
@@ -639,7 +637,8 @@ else:
 
         custom_hover1 = np.stack((df_m1["Time_HHMMSS"], df_m1["Time_Seconds"], df_m1["Distance_Meters"]), axis=-1)
         for col in probe_cols:
-            fig1.add_trace(go.Scatter(x=df_m1["Time_Stamp"], y=df_m1[col], mode="lines", name=col, customdata=custom_hover1, hovertemplate="%{fullData.name}: %{y:.1f} °C<br>Time: %{customdata[0]}<br>Dist: %{customdata[2]:.2f} m", line=dict(color=PROBE_COLORS.get(col)), xaxis="x"))
+            legend_name = f"<span style='color:gray'>{col}</span>" if col in invalid_cols else col
+            fig1.add_trace(go.Scatter(x=df_m1["Time_Stamp"], y=df_m1[col], mode="lines", name=legend_name, customdata=custom_hover1, hovertemplate=f"{col}: %{{y:.1f}} °C<br>Time: %{{customdata[0]}}<br>Dist: %{{customdata[2]:.2f}} m", line=dict(color=PROBE_COLORS.get(col)), xaxis="x"))
             
         for z in zones:
             z_color = GROUP_COLORS.get(z["group"], "rgba(200, 200, 200, 0.2)")
@@ -832,11 +831,12 @@ else:
             fig2 = go.Figure()
             for col in probe_cols:
                 if col in invalid_cols:
-                    fig2.add_trace(go.Scatter(x=[np.nan], y=[np.nan], mode="lines", name=f"{col} (Inactive)", line=dict(color=PROBE_COLORS.get(col))))
+                    fig2.add_trace(go.Scatter(x=[np.nan], y=[np.nan], mode="lines", name=f"<span style='color:gray'>{col} (Inactive)</span>", hovertemplate=f"{col} (Inactive)<extra></extra>", line=dict(color=PROBE_COLORS.get(col))))
                     continue
                 offset_m = data1["probe_start_info"][col]["Offset_Meters"]
                 indiv_hover = np.stack((df_m1["Time_HHMMSS"], df_m1["Time_Seconds"], np.full(len(df_m1), offset_m)), axis=-1)
-                fig2.add_trace(go.Scatter(x=df_m1[f"Distance_{col}"], y=df_m1[col], mode="lines", name=f"{col} (+{offset_m:.2f}m)" if offset_m > 0 else f"{col} (Lead)", customdata=indiv_hover, hovertemplate="%{fullData.name}: %{y:.1f} °C<br>Indiv Dist: %{x:.2f} m<br>Time: %{customdata[0]}", line=dict(color=PROBE_COLORS.get(col))))
+                disp_name = f"{col} (+{offset_m:.2f}m)" if offset_m > 0 else f"{col} (Lead)"
+                fig2.add_trace(go.Scatter(x=df_m1[f"Distance_{col}"], y=df_m1[col], mode="lines", name=disp_name, customdata=indiv_hover, hovertemplate=f"{disp_name}: %{{y:.1f}} °C<br>Indiv Dist: %{{x:.2f}} m<br>Time: %{{customdata[0]}}", line=dict(color=PROBE_COLORS.get(col))))
             for z in zones:
                 z_color = GROUP_COLORS.get(z["group"], "rgba(200, 200, 200, 0.2)")
                 fig2.add_vrect(x0=z["start"], x1=z["start"] + z["length"], fillcolor=z_color, layer="below", line_width=0.5, line_dash="dot", line_color="rgba(120, 120, 120, 0.4)", annotation_text=f"{z['num']}.{z['name']}", annotation_position="top left", annotation=dict(font_size=9, font_color="#a0aab2", textangle=-90))
@@ -1019,10 +1019,12 @@ else:
                 
                 for col in probe_cols:
                     if col in df_m1.columns: 
-                        fig_comp.add_trace(go.Scatter(x=df_m1["Distance_Meters"], y=df_m1[col], mode="lines", name=f"F1: {col}", customdata=custom_hover1, hovertemplate="F1 %{fullData.name}: %{y:.1f} °C<br>Time: %{customdata[0]}<br>Dist: %{x:.2f} m", line=dict(color=PROBE_COLORS.get(col), width=1.5)))
+                        legend_name = f"<span style='color:gray'>F1: {col}</span>" if col in invalid_cols else f"F1: {col}"
+                        fig_comp.add_trace(go.Scatter(x=df_m1["Distance_Meters"], y=df_m1[col], mode="lines", name=legend_name, customdata=custom_hover1, hovertemplate=f"F1 {col}: %{{y:.1f}} °C<br>Time: %{{customdata[0]}}<br>Dist: %{{x:.2f}} m", line=dict(color=PROBE_COLORS.get(col), width=1.5)))
                 for col in data2["probe_cols"]:
                     if col in df_m2.columns: 
-                        fig_comp.add_trace(go.Scatter(x=df_m2["Distance_Meters"], y=df_m2[col], mode="lines", name=f"F2: {col}", customdata=custom_hover2, hovertemplate="F2 %{fullData.name}: %{y:.1f} °C<br>Time: %{customdata[0]}<br>Dist: %{x:.2f} m", line=dict(dash='dash', color=PROBE_COLORS.get(col), width=1.5)))
+                        legend_name = f"<span style='color:gray'>F2: {col}</span>" if col in data2["invalid_cols"] else f"F2: {col}"
+                        fig_comp.add_trace(go.Scatter(x=df_m2["Distance_Meters"], y=df_m2[col], mode="lines", name=legend_name, customdata=custom_hover2, hovertemplate=f"F2 {col}: %{{y:.1f}} °C<br>Time: %{{customdata[0]}}<br>Dist: %{{x:.2f}} m", line=dict(dash='dash', color=PROBE_COLORS.get(col), width=1.5)))
                 
                 d_max_view = total_furnace_length + 1.0
                 d_min_comp = min(df_m1["Distance_Meters"].min(), df_m2["Distance_Meters"].min())
