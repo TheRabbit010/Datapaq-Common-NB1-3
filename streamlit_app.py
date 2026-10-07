@@ -63,15 +63,9 @@ def style_inspection_matrix(row, variant, check_dryer_max=False):
             base_bg = "background-color: rgba(255, 199, 119, 0.15);" 
         elif "Brazing" in col:
             base_bg = "background-color: rgba(255, 160, 160, 0.15);" 
-        elif "ΔT" in col:
-            base_bg = "background-color: rgba(100, 149, 237, 0.15);" 
             
         if val == "***":
             styles[i] = f'{base_bg} color: #ffeb3b; font-weight: bold; text-align: center;'
-            continue
-
-        if "ΔT" in col:
-            styles[i] = f'{base_bg} color: #ffffff;'
             continue
 
         rule = rules.get(col)
@@ -692,43 +686,6 @@ else:
             
         brazing_df = df_m1[(df_m1["Distance_Meters"] >= brazing_info["Start (m)"]) & (df_m1["Distance_Meters"] <= brazing_info["End (m)"])]
 
-        # ====================================================================================
-        # CALCULATION: Delta T at first 577°C (Only for NB1 CDS)
-        # ====================================================================================
-        delta_T_results = {}
-        if f_variant == "NB1 (CDS/KN9/12SHP)":
-            groups_to_check = [
-                ("Bottom", ["PB#1", "PB#2", "PB#3", "PB#4"]),
-                ("Top", ["PB#5", "PB#6", "PB#7", "PB#8"])
-            ]
-            for grp_name, p_list in groups_to_check:
-                valid_p = [p for p in p_list if p in probe_cols and p not in invalid_cols]
-                if not valid_p:
-                    for p in p_list: delta_T_results[p] = "N/A"
-                    continue
-                
-                # Check if any valid probe in this group reached 577.0°C in the Brazing zone
-                mask_577 = brazing_df[valid_p] >= 577.0
-                if mask_577.to_numpy().any():
-                    # Find the first row index where ANY valid probe in the group hit >= 577
-                    first_row_idx = mask_577.any(axis=1).idxmax()
-                    
-                    row_vals = brazing_df.loc[first_row_idx, valid_p]
-                    lead_probe = row_vals.idxmax()
-                    min_probe = row_vals.idxmin()
-                    val_max = row_vals[lead_probe]
-                    val_min = row_vals[min_probe]
-                    diff = val_max - val_min
-                    
-                    # Format standard string to display
-                    res_str = f"{val_max:.1f} - {val_min:.1f} = {diff:.1f}"
-                    for p in valid_p:
-                        delta_T_results[p] = res_str
-                else:
-                    for p in valid_p:
-                        delta_T_results[p] = "No 577°C"
-        # ====================================================================================
-
         matrix_rows = []
         for col in probe_cols:
             if col in invalid_cols:
@@ -742,10 +699,6 @@ else:
                 r["Brazing Max (°C)"] = "***"
                 for bt in [cfg.get(f"brazing_dwell_thresh_{i}") for i in range(1, 5)]:
                     if bt is not None: r[f"Brazing Dwell (≥{int(bt)}°C)"] = "***"
-                
-                if f_variant == "NB1 (CDS/KN9/12SHP)":
-                    r["Max ΔT @ First 577°C"] = "***"
-                    
                 matrix_rows.append(r)
                 continue
 
@@ -765,10 +718,6 @@ else:
             r["Brazing Max (°C)"] = f"{bz_max:.1f}" if not brazing_df.empty and pd.notna(bz_max) else "N/A"
             for bt in [cfg.get(f"brazing_dwell_thresh_{i}") for i in range(1, 5)]:
                 if bt is not None: r[f"Brazing Dwell (≥{int(bt)}°C)"] = format_dwell_time((brazing_df[col] >= bt).sum()) if not brazing_df.empty else "00:00:00"
-            
-            if f_variant == "NB1 (CDS/KN9/12SHP)":
-                r["Max ΔT @ First 577°C"] = delta_T_results.get(col, "N/A")
-                
             matrix_rows.append(r)
             
         if f_variant == "NB1 (RAD)":
@@ -887,7 +836,7 @@ else:
                 offset_m = data1["probe_start_info"][col]["Offset_Meters"]
                 indiv_hover = np.stack((df_m1["Time_HHMMSS"], df_m1["Time_Seconds"], np.full(len(df_m1), offset_m)), axis=-1)
                 disp_name = f"{col} (+{offset_m:.2f}m)" if offset_m > 0 else f"{col} (Lead)"
-                fig2.add_trace(go.Scatter(x=df_m1[f"Distance_{col}"], y=df_m1[col], mode="lines", name=disp_name, customdata=indiv_hover, hovertemplate=f"{col}: %{{y:.1f}} °C<br>Indiv Dist: %{{x:.2f}} m<br>Time: %{{customdata[0]}}", line=dict(color=PROBE_COLORS.get(col))))
+                fig2.add_trace(go.Scatter(x=df_m1[f"Distance_{col}"], y=df_m1[col], mode="lines", name=disp_name, customdata=indiv_hover, hovertemplate=f"{disp_name}: %{{y:.1f}} °C<br>Indiv Dist: %{{x:.2f}} m<br>Time: %{{customdata[0]}}", line=dict(color=PROBE_COLORS.get(col))))
             for z in zones:
                 z_color = GROUP_COLORS.get(z["group"], "rgba(200, 200, 200, 0.2)")
                 fig2.add_vrect(x0=z["start"], x1=z["start"] + z["length"], fillcolor=z_color, layer="below", line_width=0.5, line_dash="dot", line_color="rgba(120, 120, 120, 0.4)", annotation_text=f"{z['num']}.{z['name']}", annotation_position="top left", annotation=dict(font_size=9, font_color="#a0aab2", textangle=-90))
