@@ -30,7 +30,7 @@ PROBE_COLORS = {"PB#1": "#ff0000", "PB#2": "#00ff00", "PB#3": "#0000ff", "PB#4":
 GROUP_COLORS = {"Dryer": "rgba(255, 235, 156, 0.15)", "Debinder": "rgba(255, 199, 119, 0.15)", "Heating": "rgba(255, 160, 160, 0.15)", "Cooling": "rgba(173, 216, 230, 0.15)"}
 
 STANDARD_SPECS = {
-    "NB1 (RAD)": {"id": "PRCNVR02044", "max": "Dryer: 175-260°C &nbsp;|&nbsp; Debinder: 200-375°C &nbsp;|&nbsp; Brazing: 583-607°C", "dwell": "Dryer ≥175°C ≥ 1.00 min &nbsp;|&nbsp; Debinder ≥200°C ≥ 2.00 min &nbsp;|&nbsp; Brazing ≥577°C = 2.30 - 7.00 min, ≥583°C ≥ 2.30 min"},
+    "NB1 (RAD)": {"id": "PRCNVR02044 Rev C", "max": "Dryer: 175-260°C &nbsp;|&nbsp; Debinder: 200-375°C &nbsp;|&nbsp; Brazing: 583-607°C", "dwell": "Dryer ≥175°C ≥ 1.00 min &nbsp;|&nbsp; Debinder ≥200°C ≥ 2.00 min &nbsp;|&nbsp; Brazing ≥577°C = 2.30 - 7.00 min, ≥583°C ≥ 2.30 min"},
     "NB1 (CDS/KN9/12SHP)": {"id": "PRCNVR02004 Rev.E + 2025 DSR TDOC_101182039 CDS BRAZING CYCLE", "max": "Dryer: 200-350°C &nbsp;|&nbsp; Debinder: 300-375°C &nbsp;|&nbsp; Brazing: 585-607°C", "dwell": "Dryer ≥200°C ≥ 1.30 min &nbsp;|&nbsp; Debinder ≥300°C ≥ 2.30 min &nbsp;|&nbsp; Brazing ≥577°C = 4.00 - 7.45 min (PB#1, PB#5) / 2.00 - 7.45 min (Others)"},
     "NB3 (KE8 : M2/EVO)": {"id": "PRCNVR02059 + V-PAS/T88/Chon Buri 1/2025-10-29-ZVK (Evaporator M2 ,EVO)", "max": "Dryer: 200-375°C &nbsp;|&nbsp; Brazing: M2 = 595-602°C , EVO = 598-606°C", "dwell": "Dryer ≥200°C ≥ 1.30 min &nbsp;|&nbsp; Brazing ≥550°C = 7.00 - 10.30 min, ≥577°C = 4.30 - 7.00 min, ≥591°C = 1.30 - 4.00 min"},
     "NB2 (Tahc)": {"id": "PRCNVR02050 Rev B", "max": "Dryer: 200-375°C &nbsp;|&nbsp; Brazing: 596-604°C", "dwell": "Dryer ≥250°C ≥ 1.00 min &nbsp;|&nbsp; Brazing ≥577°C = 4.00 - 7.00 min, ≥591°C = 1.30 - 4.30 min"},
@@ -226,21 +226,21 @@ def parse_operator_and_metadata(comments_list):
     clean_notes = re.sub(r'(?i)https?://[^\s]*', '', clean_notes)
     clean_notes = re.sub(r'(?i)\\\\[a-z0-9_]+\\[^\s]*', '', clean_notes)
     
-    # Allow % symbol for percentages in notes
-    clean_notes = re.sub(r'[^\w\s\.\,\-\/\(\)\=\+:\%]', ' ', clean_notes)
+    # Allow % and * symbols for percentages and probe notes
+    clean_notes = re.sub(r'[^\w\s\.\,\-\/\(\)\=\+:\%\*]', ' ', clean_notes)
     clean_notes = re.sub(r'\b[A-Z0-9]{15,}\b', '', clean_notes) 
     
     for token in [comp, site]:
         if token != "N/A":
             clean_notes = re.sub(rf'\b{re.escape(token)}\b', '', clean_notes, flags=re.IGNORECASE)
             
+    # Extract locations without deleting the probe note from clean_notes
     extra_probes = []
-    probe_start_match = re.search(r'(?:Probe\s*no\.?\s*[1-8]|PB#[1-8]|#[1-8]\s*\()', clean_notes, flags=re.IGNORECASE)
-    if probe_start_match:
-        probe_text = clean_notes[probe_start_match.start():]
-        # Do NOT truncate clean_notes here, preserve the whole string
-        extra_probes_raw = re.split(r'(?=(?:Probe\s*no\.?\s*[1-8]|PB#[1-8]|#[1-8]\s*\())', probe_text, flags=re.IGNORECASE)
-        extra_probes = [p.strip() for p in extra_probes_raw if p.strip()]
+    probe_matches = re.finditer(r'(?:Probe\s*no\.?\s*[1-8]|PB#[1-8]|#[1-8]\s*\().*?(?=\Z|\bProbe\s*no|\bPB#|#[1-8]\s*\()', clean_notes, flags=re.IGNORECASE)
+    for m in probe_matches:
+        p_text = m.group(0).strip()
+        if re.search(r'(core|bottom|top|left|right|manifold|pipe|drill)', p_text, re.IGNORECASE):
+            extra_probes.append(p_text)
     
     clean_notes = re.sub(r'\s:\s(?=[A-Za-z])', ' ', clean_notes)
     clean_notes = re.sub(r'\s{2,}', ' ', clean_notes)
@@ -396,11 +396,17 @@ def process_paq_file(file_bytes, filename):
             # FIND "during datapaq" TO AVOID GIBBERISH AT THE START
             match_during = re.search(r'(?i)(?:data\s*)?during\s*datapaq', s_rec)
             if match_during:
-                s_rec = s_rec[match_during.start():]
+                s_rec = "Data during datapaq" + s_rec[match_during.end():]
             else:
                 s_rec = re.split(r'\b[A-Za-z]:\\', s_rec)[0]
                 s_rec = re.sub(r'\S{30,}', '', s_rec) 
+            
+            # Truncate after Bot temps to remove trailing gibberish
+            end_match = re.search(r'(Bot\s*:.*?\'?C\.?)', s_rec, re.IGNORECASE)
+            if end_match:
+                s_rec = s_rec[:end_match.end()]
                 
+            s_rec = re.sub(r'[\{\}\[\]\^\`\|\\]+', '', s_rec) # Remove common binary-to-ascii garbage chars
             s_rec = re.split(r'\bdouble m\b', s_rec, flags=re.IGNORECASE)[0]
             s_rec = re.sub(r'\b(?:CProcessFile|COven|CZone|CRecipe|CProduct|CAnalysisParameters|CToleranceCurve|CAlarmParametersDouble|CMaximumMinimumAnalysisParameters|CTimeAtMeasurementAnalysisParameters|CRiseFallAnalysisParameters|CSlopeAnalysisParameters|CPeakDifferenceAnalysisParameters|CAreaUnderCurveAnalysisParameters|CFurnaceSurveyAnalysisParameters)\b', '', s_rec).strip()
             s_rec = re.sub(r'^[>#;\.,\|]+', '', s_rec).strip()
@@ -421,6 +427,10 @@ def process_paq_file(file_bytes, filename):
             s_rec = re.sub(r'(Temp\s*Bot\s*:?)', r'\n\1', s_rec, flags=re.IGNORECASE)
             s_rec = re.sub(r'(Top\s*:)', r'\n\1', s_rec, flags=re.IGNORECASE)
             s_rec = re.sub(r'(Bot\s*:)', r'\n\1', s_rec, flags=re.IGNORECASE)
+            
+            # clean up multiple spaces and newlines
+            s_rec = re.sub(r' +', ' ', s_rec)
+            s_rec = re.sub(r'\n\s*\n', '\n\n', s_rec).strip()
             
             if s_rec and s_rec not in found_recipes: found_recipes.append(s_rec)
             continue
