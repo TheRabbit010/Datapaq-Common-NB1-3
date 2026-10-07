@@ -35,7 +35,7 @@ STANDARD_SPECS = {
     "NB3 (KE8 : M2/EVO)": {"id": "PRCNVR02059 + V-PAS/T88/Chon Buri 1/2025-10-29-ZVK (Evaporator M2 ,EVO)", "max": "Dryer: 200-375°C &nbsp;|&nbsp; Brazing: M2 = 595-602°C , EVO = 598-606°C", "dwell": "Dryer ≥200°C ≥ 1.30 min &nbsp;|&nbsp; Brazing ≥550°C = 7.00 - 10.30 min, ≥577°C = 4.30 - 7.00 min, ≥591°C = 1.30 - 4.00 min"},
     "NB2 (Tahc)": {"id": "PRCNVR02050 Rev B", "max": "Dryer: 200-375°C &nbsp;|&nbsp; Brazing: 596-604°C", "dwell": "Dryer ≥250°C ≥ 1.00 min &nbsp;|&nbsp; Brazing ≥577°C = 4.00 - 7.00 min, ≥591°C = 1.30 - 4.30 min"},
     "NB2 (Utahc)": {"id": "PRCNVR02050 Rev B + internal control", "max": "Dryer: 200-375°C &nbsp;|&nbsp; Brazing: 596-606°C", "dwell": "Dryer ≥250°C ≥ 1.00 min &nbsp;|&nbsp; Brazing ≥577°C = 4.00 - 7.00 min, ≥591°C = 1.30 - 4.30 min"},
-    "NB3 (BTM)": {"id": "PRCNVR02033", "max": "Dryer: 300-375°C &nbsp;|&nbsp; Brazing: 595-608°C", "dwell": "Dryer ≥300°C ≥ 2.00 min &nbsp;|&nbsp; Brazing ≥577°C = 4.00 - 14.00 min, ≥591°C = 2.00 - 12.00 min, ≥600°C ≤ 8.00 min"}
+    "NB3 (BTM)": {"id": "PRCNVR02033 Rev C", "max": "Dryer: 300-375°C &nbsp;|&nbsp; Brazing: 595-608°C", "dwell": "Dryer ≥300°C ≥ 2.00 min &nbsp;|&nbsp; Brazing ≥577°C = 4.00 - 14.00 min, ≥591°C = 2.00 - 12.00 min, ≥600°C ≤ 8.00 min"}
 }
 
 VALIDATION_RULES = {
@@ -689,35 +689,48 @@ else:
         matrix_rows = []
         for col in probe_cols:
             if col in invalid_cols:
-                r = {"Probe": col, "Dryer Max (°C)": "***"}
-                for dt in [cfg.get("dryer_dwell_thresh_1"), cfg.get("dryer_dwell_thresh_2")]:
-                    if dt is not None: r[f"Dryer Dwell (≥{int(dt)}°C)"] = "***"
+                r = {"Probe": col}
+                
+                # 1. BRAZING
+                r["Brazing Max (°C)"] = "***"
+                for bt in [cfg.get(f"brazing_dwell_thresh_{i}") for i in range(1, 5)]:
+                    if bt is not None: r[f"Brazing Dwell (≥{int(bt)}°C)"] = "***"
+                    
+                # 2. DEBINDER
                 if has_debinder and debinder_df is not None:
                     d_thresh = cfg.get("debinder_dwell_thresh", 300.0) or 300.0
                     r["Debinder Max (°C)"] = "***"
                     r[f"Debinder Dwell (≥{int(d_thresh)}°C)"] = "***"
-                r["Brazing Max (°C)"] = "***"
-                for bt in [cfg.get(f"brazing_dwell_thresh_{i}") for i in range(1, 5)]:
-                    if bt is not None: r[f"Brazing Dwell (≥{int(bt)}°C)"] = "***"
+                    
+                # 3. DRYER
+                r["Dryer Max (°C)"] = "***"
+                for dt in [cfg.get("dryer_dwell_thresh_1"), cfg.get("dryer_dwell_thresh_2")]:
+                    if dt is not None: r[f"Dryer Dwell (≥{int(dt)}°C)"] = "***"
+                    
                 matrix_rows.append(r)
                 continue
 
             r = {"Probe": col}
-            d_max = dryer_max_df[col].max()
-            r["Dryer Max (°C)"] = f"{d_max:.1f}" if not dryer_max_df.empty and pd.notna(d_max) else "N/A"
-            for dt in [cfg.get("dryer_dwell_thresh_1"), cfg.get("dryer_dwell_thresh_2")]:
-                if dt is not None: r[f"Dryer Dwell (≥{int(dt)}°C)"] = format_dwell_time((dryer_dwell_df[col] >= dt).sum()) if not dryer_dwell_df.empty else "00:00:00"
-                
+            
+            # 1. BRAZING
+            bz_max = brazing_df[col].max()
+            r["Brazing Max (°C)"] = f"{bz_max:.1f}" if not brazing_df.empty and pd.notna(bz_max) else "N/A"
+            for bt in [cfg.get(f"brazing_dwell_thresh_{i}") for i in range(1, 5)]:
+                if bt is not None: r[f"Brazing Dwell (≥{int(bt)}°C)"] = format_dwell_time((brazing_df[col] >= bt).sum()) if not brazing_df.empty else "00:00:00"
+
+            # 2. DEBINDER
             if has_debinder and debinder_df is not None:
                 d_thresh = cfg.get("debinder_dwell_thresh", 300.0) or 300.0
                 db_max = debinder_df[col].max()
                 r["Debinder Max (°C)"] = f"{db_max:.1f}" if not debinder_df.empty and pd.notna(db_max) else "N/A"
                 r[f"Debinder Dwell (≥{int(d_thresh)}°C)"] = format_dwell_time((debinder_df[col] >= d_thresh).sum()) if not debinder_df.empty else "00:00:00"
+
+            # 3. DRYER
+            d_max = dryer_max_df[col].max()
+            r["Dryer Max (°C)"] = f"{d_max:.1f}" if not dryer_max_df.empty and pd.notna(d_max) else "N/A"
+            for dt in [cfg.get("dryer_dwell_thresh_1"), cfg.get("dryer_dwell_thresh_2")]:
+                if dt is not None: r[f"Dryer Dwell (≥{int(dt)}°C)"] = format_dwell_time((dryer_dwell_df[col] >= dt).sum()) if not dryer_dwell_df.empty else "00:00:00"
                 
-            bz_max = brazing_df[col].max()
-            r["Brazing Max (°C)"] = f"{bz_max:.1f}" if not brazing_df.empty and pd.notna(bz_max) else "N/A"
-            for bt in [cfg.get(f"brazing_dwell_thresh_{i}") for i in range(1, 5)]:
-                if bt is not None: r[f"Brazing Dwell (≥{int(bt)}°C)"] = format_dwell_time((brazing_df[col] >= bt).sum()) if not brazing_df.empty else "00:00:00"
             matrix_rows.append(r)
             
         if f_variant == "NB1 (RAD)":
@@ -836,7 +849,7 @@ else:
                 offset_m = data1["probe_start_info"][col]["Offset_Meters"]
                 indiv_hover = np.stack((df_m1["Time_HHMMSS"], df_m1["Time_Seconds"], np.full(len(df_m1), offset_m)), axis=-1)
                 disp_name = f"{col} (+{offset_m:.2f}m)" if offset_m > 0 else f"{col} (Lead)"
-                fig2.add_trace(go.Scatter(x=df_m1[f"Distance_{col}"], y=df_m1[col], mode="lines", name=disp_name, customdata=indiv_hover, hovertemplate=f"{disp_name}: %{{y:.1f}} °C<br>Indiv Dist: %{{x:.2f}} m<br>Time: %{{customdata[0]}}", line=dict(color=PROBE_COLORS.get(col))))
+                fig2.add_trace(go.Scatter(x=df_m1[f"Distance_{col}"], y=df_m1[col], mode="lines", name=disp_name, customdata=indiv_hover, hovertemplate=f"{col}: %{{y:.1f}} °C<br>Indiv Dist: %{{x:.2f}} m<br>Time: %{{customdata[0]}}", line=dict(color=PROBE_COLORS.get(col))))
             for z in zones:
                 z_color = GROUP_COLORS.get(z["group"], "rgba(200, 200, 200, 0.2)")
                 fig2.add_vrect(x0=z["start"], x1=z["start"] + z["length"], fillcolor=z_color, layer="below", line_width=0.5, line_dash="dot", line_color="rgba(120, 120, 120, 0.4)", annotation_text=f"{z['num']}.{z['name']}", annotation_position="top left", annotation=dict(font_size=9, font_color="#a0aab2", textangle=-90))
