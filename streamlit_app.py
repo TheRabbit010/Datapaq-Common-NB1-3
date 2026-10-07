@@ -208,7 +208,6 @@ def parse_operator_and_metadata(comments_list):
             clean_notes = re.sub(rf'^\s*{re.escape(token)}\b\s*', '', clean_notes, flags=re.IGNORECASE)
 
     clean_notes = re.sub(r'NB\s+with\s+Debinder\s+NB\s+Furnace\s+Total\s*;\s*[\d,]+\s*mm', '', clean_notes, flags=re.IGNORECASE)
-    
     clean_notes = re.split(r':?\s*NB\s*[1-3]\s*with\s*Debinder', clean_notes, flags=re.IGNORECASE)[0]
     
     chop_pattern = r'\b(NB\s*\d\s*DryOff|DryOff-Z|Xfer2\s*Watcol|Watcol1|AN\s*h8|ljjSQP|xwTLL)\b'
@@ -216,9 +215,6 @@ def parse_operator_and_metadata(comments_list):
     if len(split_notes) > 1:
         clean_notes = split_notes[0].strip()
         
-    clean_notes = re.sub(r'\s*[1-8]?Bot\s*-\s*[a-zA-Z\s/0-9]+\.\s*', ' ', clean_notes, flags=re.IGNORECASE)
-    clean_notes = re.sub(r'\s*[1-8]?Top\s*-\s*[a-zA-Z\s/0-9]+\.\s*', ' ', clean_notes, flags=re.IGNORECASE)
-    
     garbage_start = re.search(r'([A-Za-z]\\[A-Za-z]|[\$\#\^\~]{2,}|\?[A-Z]{2,}|[a-z]{2,}\~|\bKO\\|\b\d{1,2}:\d{1,2}[A-Z]+)', clean_notes)
     if garbage_start:
         clean_notes = clean_notes[:garbage_start.start()]
@@ -230,7 +226,8 @@ def parse_operator_and_metadata(comments_list):
     clean_notes = re.sub(r'(?i)https?://[^\s]*', '', clean_notes)
     clean_notes = re.sub(r'(?i)\\\\[a-z0-9_]+\\[^\s]*', '', clean_notes)
     
-    clean_notes = re.sub(r'[^\w\s\.\,\-\/\(\)\=\+:]', ' ', clean_notes)
+    # Allow % symbol for percentages in notes
+    clean_notes = re.sub(r'[^\w\s\.\,\-\/\(\)\=\+:\%]', ' ', clean_notes)
     clean_notes = re.sub(r'\b[A-Z0-9]{15,}\b', '', clean_notes) 
     
     for token in [comp, site]:
@@ -241,7 +238,7 @@ def parse_operator_and_metadata(comments_list):
     probe_start_match = re.search(r'(?:Probe\s*no\.?\s*[1-8]|PB#[1-8]|#[1-8]\s*\()', clean_notes, flags=re.IGNORECASE)
     if probe_start_match:
         probe_text = clean_notes[probe_start_match.start():]
-        clean_notes = clean_notes[:probe_start_match.start()].strip()
+        # Do NOT truncate clean_notes here, preserve the whole string
         extra_probes_raw = re.split(r'(?=(?:Probe\s*no\.?\s*[1-8]|PB#[1-8]|#[1-8]\s*\())', probe_text, flags=re.IGNORECASE)
         extra_probes = [p.strip() for p in extra_probes_raw if p.strip()]
     
@@ -395,19 +392,22 @@ def process_paq_file(file_bytes, filename):
     for s in raw_texts:
         is_recipe = re.search(r'\b(During\s*datapaq|O2\s*Exit|ppm|CV\s*speed|mm/min|N2\s*Flow|WJ\s*Flow|Top\s*Temp|Bot\s*temp|Temp\s*Top|Temp\s*Bot|SP1|SP2\s*==>|Braze[d]?\s*Temp|BrazeTemp|Brazed|Brazing|Hz)\b|(Top\s*:|Bot\s*:)', s, re.IGNORECASE)
         if is_recipe:
-            s_rec = re.split(r'\b[A-Za-z]:\\', s)[0]
+            s_rec = s
+            # FIND "during datapaq" TO AVOID GIBBERISH AT THE START
+            match_during = re.search(r'(?i)(?:data\s*)?during\s*datapaq', s_rec)
+            if match_during:
+                s_rec = s_rec[match_during.start():]
+            else:
+                s_rec = re.split(r'\b[A-Za-z]:\\', s_rec)[0]
+                s_rec = re.sub(r'\S{30,}', '', s_rec) 
+                
             s_rec = re.split(r'\bdouble m\b', s_rec, flags=re.IGNORECASE)[0]
             s_rec = re.sub(r'\b(?:CProcessFile|COven|CZone|CRecipe|CProduct|CAnalysisParameters|CToleranceCurve|CAlarmParametersDouble|CMaximumMinimumAnalysisParameters|CTimeAtMeasurementAnalysisParameters|CRiseFallAnalysisParameters|CSlopeAnalysisParameters|CPeakDifferenceAnalysisParameters|CAreaUnderCurveAnalysisParameters|CFurnaceSurveyAnalysisParameters)\b', '', s_rec).strip()
             s_rec = re.sub(r'^[>#;\.,\|]+', '', s_rec).strip()
             
-            if re.search(r'[\]\[\^\`\{\}\\\|]{2,}', s_rec) or re.search(r'[A-Za-z_]{20,}', s_rec):
-                if not re.search(r'(Top|Bot)\s*:\s*[-0-9/]+', s_rec, re.IGNORECASE):
-                    s_rec = ""
-                
             s_rec = re.sub(r'cer<>Hz\}', '', s_rec, flags=re.IGNORECASE)
             s_rec = re.sub(r'==\?mnojjo[^\s]+', '', s_rec, flags=re.IGNORECASE)
             s_rec = re.sub(r'(?i)hz@[a-z0-9\^\[\]\{\}\#\@\_\-\+V]+', '', s_rec).strip()
-            s_rec = re.sub(r'^[^a-zA-Z0-9\-\:]+', '', s_rec).strip()
             
             s_rec = re.sub(r'(WJ Flow)', r'\n\1', s_rec)
             s_rec = re.sub(r'(NB Top Temp)', r'\n\1', s_rec)
@@ -421,9 +421,6 @@ def process_paq_file(file_bytes, filename):
             s_rec = re.sub(r'(Temp\s*Bot\s*:?)', r'\n\1', s_rec, flags=re.IGNORECASE)
             s_rec = re.sub(r'(Top\s*:)', r'\n\1', s_rec, flags=re.IGNORECASE)
             s_rec = re.sub(r'(Bot\s*:)', r'\n\1', s_rec, flags=re.IGNORECASE)
-            
-            if re.search(r'During\s*datapaq', s_rec, re.IGNORECASE):
-                s_rec = re.sub(r'^.*?(During\s*datapaq)', r'\1', s_rec, flags=re.IGNORECASE|re.DOTALL)
             
             if s_rec and s_rec not in found_recipes: found_recipes.append(s_rec)
             continue
