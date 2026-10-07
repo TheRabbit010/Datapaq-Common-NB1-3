@@ -7,4 +7,3 @@ Pillow
 openpyxl
 matplotlib
 kaleido
-openpyxl
