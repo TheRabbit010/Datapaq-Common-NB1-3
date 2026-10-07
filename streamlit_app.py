@@ -934,7 +934,8 @@ else:
                         img_bytes_fig2 = fig2.to_image(format="png", width=1200, height=600, scale=1.5)
             except Exception as e:
                 has_kaleido = False
-                st.warning("⚠️ ระบบไม่สามารถแนบรูปกราฟลงในรีพอร์ตได้ เนื่องจากขาดไลบรารี `kaleido` (กรุณาติดตั้งโดยใช้คำสั่ง `pip install kaleido`)")
+                st.warning(f"⚠️ ไม่สามารถสร้างรูปกราฟได้ (Error: {str(e)})")
+                st.info("💡 คุณยังสามารถกดดาวน์โหลดไฟล์ Report และ Raw Data ได้ตามปกติ (แต่จะไม่มีรูปกราฟแนบไปใน Excel/HTML ครับ)")
 
             # ---------------------------------------------------------
             # EXCEL EXPORT
