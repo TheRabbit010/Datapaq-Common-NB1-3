@@ -607,7 +607,7 @@ else:
     m_col2.metric("Conveyor Speed", f"{data1['line_speed_mpm']:.3f} m/min")
     m_col3.metric("Time in Furnace", f"{furnace_duration_secs}s (~{furnace_duration_mins:.1f} min)")
 
-    tabs = st.tabs(["📊 Profile Graphs", "🏭 Zone & Stage Summary", "📈 Statistics & Boxplots", "💾 Master Dataset & Export", "⚖ Compare Files"])
+    tabs = st.tabs(["📊 Profile Graphs", "🏭 Zone & Stage Summary", "📈 Statistics & Boxplots", "💾 Data Export & Download", "⚖ Compare Files"])
 
     with tabs[0]:
         st.subheader("Global Furnace Profile")
@@ -884,7 +884,9 @@ else:
         st.dataframe(pd.DataFrame(stats_list), use_container_width=True, hide_index=True)
 
     with tabs[3]:
-        st.subheader("💾 Unified 1-Row Dataset (Database Ready)")
+        st.subheader("💾 Data Export & Download")
+        
+        # คำนวณ Master Record ไว้เพื่อนำไปใส่ในไฟล์ Export เท่านั้น (ไม่แสดงตารางบนหน้าเว็บแล้ว)
         row_data = {"File_Name": data1["filename"], "Furnace_Type": f_variant, "Operator_Name": data1["operator_name"], "Company": data1["company"], "Site": data1["site"], "Entrance_Time": data1["detected_start_hhmmss"], "Line_Speed_MPM": data1["line_speed_mpm"]}
         for pb in [f"PB{i}" for i in range(1, 9)]:
             ch = f"PB#{pb.replace('PB','')}"
@@ -902,14 +904,84 @@ else:
                 row_data[f"{pb}_Lag_Sec"] = ""
                 
         df_single_row = pd.DataFrame([row_data])
-        st.dataframe(df_single_row, use_container_width=True)
 
-        buffer = io.BytesIO()
-        with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-            df_single_row.to_excel(writer, sheet_name="Master_Record", index=False)
-            df_zone_summary.to_excel(writer, sheet_name="Zone_Peaks", index=False)
-            pd.DataFrame(matrix_rows).to_excel(writer, sheet_name="Inspection_Matrix", index=False)
-        st.download_button(label="📥 Download Complete Excel Report", data=buffer.getvalue(), file_name=f"{os.path.splitext(data1['filename'])[0]}_Analysis.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        col1, col2 = st.columns(2)
+        
+        # =========================================================
+        # ปุ่มที่ 1: Download Analysis Report (Excel / PDF)
+        # =========================================================
+        with col1:
+            st.markdown("#### 📊 1. Download Analysis Report")
+            st.caption("ดาวน์โหลดสรุปผล (Zone Peaks & Inspection Matrix)")
+            report_format = st.radio("เลือกชนิดไฟล์ Report:", ["Excel (.xlsx)", "PDF (.pdf)"], horizontal=True, key="radio_report")
+            
+            if report_format == "Excel (.xlsx)":
+                buffer_report = io.BytesIO()
+                with pd.ExcelWriter(buffer_report, engine='openpyxl') as writer:
+                    df_single_row.to_excel(writer, sheet_name="Master_Record", index=False)
+                    df_zone_summary.to_excel(writer, sheet_name="Zone_Peaks", index=False)
+                    pd.DataFrame(matrix_rows).to_excel(writer, sheet_name="Inspection_Matrix", index=False)
+                
+                st.download_button(
+                    label="📥 Download Report (.xlsx)", 
+                    data=buffer_report.getvalue(), 
+                    file_name=f"{os.path.splitext(data1['filename'])[0]}_Report.xlsx", 
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True
+                )
+            
+            elif report_format == "PDF (.pdf)":
+                st.info("💡 หมายเหตุ: การสร้างไฟล์ PDF โดยตรงจำเป็นต้องติดตั้ง Library เสริม (เช่น pdfkit) ชั่วคราวระบบจะส่งออกเป็น HTML ซึ่งคุณสามารถใช้ Browser สั่ง Print เป็น PDF ได้")
+                
+                html_content = f"""
+                <h2>Analysis Report: {data1['filename']}</h2>
+                <h3>1. Zone Peak Temperatures</h3>
+                {df_zone_summary.to_html(index=False)}
+                <br>
+                <h3>2. Inspection Matrix</h3>
+                {pd.DataFrame(matrix_rows).to_html(index=False)}
+                """
+                st.download_button(
+                    label="📥 Download Report (.html สำหรับ Print เป็น PDF)", 
+                    data=html_content.encode('utf-8'), 
+                    file_name=f"{os.path.splitext(data1['filename'])[0]}_Report.html", 
+                    mime="text/html",
+                    use_container_width=True
+                )
+                
+        # =========================================================
+        # ปุ่มที่ 2: Download Raw Graph Data (Excel / CSV)
+        # =========================================================
+        with col2:
+            st.markdown("#### 📈 2. Download Raw Data")
+            st.caption("ดาวน์โหลดข้อมูลอุณหภูมิดิบที่ใช้แสดงผลกราฟ")
+            raw_format = st.radio("เลือกชนิดไฟล์ Raw Data:", ["CSV (.csv)", "Excel (.xlsx)"], horizontal=True, key="radio_raw")
+            
+            # ลบคอลัมน์คำนวณระยะทางแบบแยก (ที่ใช้ทำ Indiv chart) ออก เพื่อให้ข้อมูลดิบดูสะอาดขึ้น
+            df_raw_export = df_m1.drop(columns=[c for c in df_m1.columns if "Distance_PB#" in c], errors='ignore')
+            
+            if raw_format == "Excel (.xlsx)":
+                buffer_raw = io.BytesIO()
+                with pd.ExcelWriter(buffer_raw, engine='openpyxl') as writer:
+                    df_raw_export.to_excel(writer, sheet_name="Raw_Profile_Data", index=False)
+                
+                st.download_button(
+                    label="📥 Download Raw Data (.xlsx)", 
+                    data=buffer_raw.getvalue(), 
+                    file_name=f"{os.path.splitext(data1['filename'])[0]}_RawData.xlsx", 
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True
+                )
+                
+            elif raw_format == "CSV (.csv)":
+                csv_data = df_raw_export.to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    label="📥 Download Raw Data (.csv)", 
+                    data=csv_data, 
+                    file_name=f"{os.path.splitext(data1['filename'])[0]}_RawData.csv", 
+                    mime="text/csv",
+                    use_container_width=True
+                )
 
     with tabs[4]:
         st.subheader("⚖️ Compare Profiles Across Two Files")
