@@ -3,14 +3,12 @@ import os
 import re
 import struct
 import zlib
-import base64
 import numpy as np
 import olefile
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 from PIL import Image
-from openpyxl.drawing.image import Image as OpenpyxlImage
 
 # ==============================================================================
 # STREAMLIT PAGE CONFIGURATION & CSS STYLING
@@ -35,7 +33,8 @@ STANDARD_SPECS = {
     "NB1 (RAD)": {"id": "PRCNVR02044", "max": "Dryer: 175-260°C &nbsp;|&nbsp; Debinder: 200-375°C &nbsp;|&nbsp; Brazing: 583-607°C", "dwell": "Dryer ≥175°C ≥ 1.00 min &nbsp;|&nbsp; Debinder ≥200°C ≥ 2.00 min &nbsp;|&nbsp; Brazing ≥577°C = 2.30 - 7.00 min, ≥583°C ≥ 2.30 min"},
     "NB1 (CDS/KN9/12SHP)": {"id": "PRCNVR02004 Rev.E + 2025 DSR TDOC_101182039 CDS BRAZING CYCLE", "max": "Dryer: 200-350°C &nbsp;|&nbsp; Debinder: 300-375°C &nbsp;|&nbsp; Brazing: 585-607°C", "dwell": "Dryer ≥200°C ≥ 1.30 min &nbsp;|&nbsp; Debinder ≥300°C ≥ 2.30 min &nbsp;|&nbsp; Brazing ≥577°C = 4.00 - 7.45 min (PB#1, PB#5) / 2.00 - 7.45 min (Others)"},
     "NB3 (KE8 : M2/EVO)": {"id": "PRCNVR02059 + V-PAS/T88/Chon Buri 1/2025-10-29-ZVK (Evaporator M2 ,EVO)", "max": "Dryer: 200-375°C &nbsp;|&nbsp; Brazing: M2 = 595-602°C , EVO = 598-606°C", "dwell": "Dryer ≥200°C ≥ 1.30 min &nbsp;|&nbsp; Brazing ≥550°C = 7.00 - 10.30 min, ≥577°C = 4.30 - 7.00 min, ≥591°C = 1.30 - 4.00 min"},
-    "NB2 (Tahc/Utahc)": {"id": "PRCNVR02050", "max": "Dryer: 200-375°C &nbsp;|&nbsp; Brazing: 596-604°C", "dwell": "Dryer ≥250°C ≥ 1.00 min &nbsp;|&nbsp; Brazing ≥577°C = 4.00 - 7.00 min, ≥591°C = 1.30 - 4.30 min"},
+    "NB2 (Tahc)": {"id": "PRCNVR02050 Rev B", "max": "Dryer: 200-375°C &nbsp;|&nbsp; Brazing: 596-604°C", "dwell": "Dryer ≥250°C ≥ 1.00 min &nbsp;|&nbsp; Brazing ≥577°C = 4.00 - 7.00 min, ≥591°C = 1.30 - 4.30 min"},
+    "NB2 (Utahc)": {"id": "PRCNVR02050 Rev B", "max": "Dryer: 200-375°C &nbsp;|&nbsp; Brazing: 596-606°C", "dwell": "Dryer ≥250°C ≥ 1.00 min &nbsp;|&nbsp; Brazing ≥577°C = 4.00 - 7.00 min, ≥591°C = 1.30 - 4.30 min"},
     "NB3 (BTM)": {"id": "PRCNVR02033", "max": "Dryer: 300-375°C &nbsp;|&nbsp; Brazing: 595-608°C", "dwell": "Dryer ≥300°C ≥ 2.00 min &nbsp;|&nbsp; Brazing ≥577°C = 4.00 - 14.00 min, ≥591°C = 2.00 - 12.00 min, ≥600°C ≤ 8.00 min"}
 }
 
@@ -43,7 +42,8 @@ VALIDATION_RULES = {
     "NB1 (RAD)": {"Dryer Max (°C)": (175, 260), "Debinder Max (°C)": (200, 375), "Brazing Max (°C)": (583, 607), "Dryer Dwell (≥175°C)": (60, 99999), "Debinder Dwell (≥200°C)": (120, 99999), "Brazing Dwell (≥577°C)": (150, 420), "Brazing Dwell (≥583°C)": (150, 99999)},
     "NB1 (CDS/KN9/12SHP)": {"Dryer Max (°C)": (200, 350), "Debinder Max (°C)": (300, 375), "Brazing Max (°C)": (585, 607), "Dryer Dwell (≥200°C)": (90, 99999), "Debinder Dwell (≥300°C)": (150, 99999), "Brazing Dwell (≥577°C)": (120, 465)},
     "NB3 (KE8 : M2/EVO)": {"Dryer Max (°C)": (200, 375), "Brazing Max (°C)": (595, 606), "Dryer Dwell (≥200°C)": (90, 99999), "Brazing Dwell (≥550°C)": (420, 630), "Brazing Dwell (≥577°C)": (270, 420), "Brazing Dwell (≥591°C)": (90, 240)},
-    "NB2 (Tahc/Utahc)": {"Dryer Max (°C)": (200, 375), "Brazing Max (°C)": (596, 604), "Dryer Dwell (≥250°C)": (60, 99999), "Brazing Dwell (≥577°C)": (240, 420), "Brazing Dwell (≥591°C)": (90, 270)},
+    "NB2 (Tahc)": {"Dryer Max (°C)": (200, 375), "Brazing Max (°C)": (596, 604), "Dryer Dwell (≥250°C)": (60, 99999), "Brazing Dwell (≥577°C)": (240, 420), "Brazing Dwell (≥591°C)": (90, 270)},
+    "NB2 (Utahc)": {"Dryer Max (°C)": (200, 375), "Brazing Max (°C)": (596, 606), "Dryer Dwell (≥250°C)": (60, 99999), "Brazing Dwell (≥577°C)": (240, 420), "Brazing Dwell (≥591°C)": (90, 270)},
     "NB3 (BTM)": {"Dryer Max (°C)": (300, 375), "Brazing Max (°C)": (595, 608), "Dryer Dwell (≥300°C)": (120, 99999), "Brazing Dwell (≥577°C)": (240, 840), "Brazing Dwell (≥591°C)": (120, 720), "Brazing Dwell (≥600°C)": (0, 480)}
 }
 
@@ -489,8 +489,10 @@ def process_paq_file(file_bytes, filename):
     
     if re.search(r'\bRAD\b', recipe_corpus, re.IGNORECASE): 
         furnace_id, furnace_variant = "NB1", "NB1 (RAD)"
-    elif re.search(r'\b(Tahc|Utahc|UT|G2|NB2)\b', recipe_corpus, re.IGNORECASE): 
-        furnace_id, furnace_variant = "NB2", "NB2 (Tahc/Utahc)"
+    elif re.search(r'\b(Utahc|UT)\b', recipe_corpus, re.IGNORECASE): 
+        furnace_id, furnace_variant = "NB2", "NB2 (Utahc)"
+    elif re.search(r'\b(Tahc|G2|NB2)\b', recipe_corpus, re.IGNORECASE): 
+        furnace_id, furnace_variant = "NB2", "NB2 (Tahc)"
     elif re.search(r'\b(CDS|KN9|12SHP|DNGA|P42QR|P42V|SU2|F44|Y4L)\b', recipe_corpus, re.IGNORECASE): 
         furnace_id, furnace_variant = "NB1", "NB1 (CDS/KN9/12SHP)"
     elif re.search(r'\bBTM\b', recipe_corpus, re.IGNORECASE):
@@ -910,117 +912,25 @@ else:
         col1, col2 = st.columns(2)
         
         # =========================================================
-        # ปุ่มที่ 1: Download Analysis Report (Excel / PDF) พร้อมรูปกราฟ
+        # ปุ่มที่ 1: Download Analysis Report (Excel) แบบไม่มีรูปกราฟ
         # =========================================================
         with col1:
             st.markdown("#### 📊 1. Download Analysis Report")
-            st.caption("ดาวน์โหลดสรุปผล (กราฟ Profile, Zone Peaks & Inspection Matrix)")
-            report_format = st.radio("เลือกชนิดไฟล์ Report:", ["Excel (.xlsx)", "PDF (.pdf)"], horizontal=True, key="radio_report")
+            st.caption("ดาวน์โหลดสรุปผล (Zone Peaks & Inspection Matrix)")
             
-            # ---------------------------------------------------------
-            # ส่วนการ Render กราฟ Plotly เป็นรูปภาพ (PNG Bytes)
-            # ---------------------------------------------------------
-            img_bytes_fig1 = None
-            img_bytes_fig2 = None
-            has_kaleido = True
+            buffer_report = io.BytesIO()
+            with pd.ExcelWriter(buffer_report, engine='openpyxl') as writer:
+                df_single_row.to_excel(writer, sheet_name="Master_Record", index=False)
+                df_zone_summary.to_excel(writer, sheet_name="Zone_Peaks", index=False)
+                pd.DataFrame(matrix_rows).to_excel(writer, sheet_name="Inspection_Matrix", index=False)
             
-            try:
-                with st.spinner("⏳ กำลังเตรียมรูปกราฟสำหรับดาวน์โหลด..."):
-                    # แปลงรูปที่ 1 (Global Profile)
-                    img_bytes_fig1 = fig1.to_image(format="png", width=1200, height=600, scale=1.5)
-                    
-                    # แปลงรูปที่ 2 (Indiv Profile) หากผู้ใช้เปิด Toggle ไว้
-                    if show_indiv_chart and 'fig2' in locals():
-                        img_bytes_fig2 = fig2.to_image(format="png", width=1200, height=600, scale=1.5)
-            except Exception as e:
-                has_kaleido = False
-                st.warning(f"⚠️ ไม่สามารถสร้างรูปกราฟได้ (Error: {str(e)})")
-                st.info("💡 คุณยังสามารถกดดาวน์โหลดไฟล์ Report และ Raw Data ได้ตามปกติ (แต่จะไม่มีรูปกราฟแนบไปใน Excel/HTML ครับ)")
-
-            # ---------------------------------------------------------
-            # EXCEL EXPORT
-            # ---------------------------------------------------------
-            if report_format == "Excel (.xlsx)":
-                buffer_report = io.BytesIO()
-                with pd.ExcelWriter(buffer_report, engine='openpyxl') as writer:
-                    # เขียนข้อมูลลงชีทแบบเดิม
-                    df_single_row.to_excel(writer, sheet_name="Master_Record", index=False)
-                    df_zone_summary.to_excel(writer, sheet_name="Zone_Peaks", index=False)
-                    pd.DataFrame(matrix_rows).to_excel(writer, sheet_name="Inspection_Matrix", index=False)
-                    
-                    # หาก Render กราฟสำเร็จ ให้สร้างชีทใหม่และแปะรูป
-                    if has_kaleido and img_bytes_fig1:
-                        wb = writer.book
-                        ws_graphs = wb.create_sheet("Profile_Graphs") # สร้างชีทเก็บกราฟโดยเฉพาะ
-                        
-                        # แทรกรูปที่ 1
-                        img_excel_1 = OpenpyxlImage(io.BytesIO(img_bytes_fig1))
-                        ws_graphs.add_image(img_excel_1, 'B2')
-                        
-                        # แทรกรูปที่ 2 (ถ้ามี) ต่อจากรูปแรก
-                        if img_bytes_fig2:
-                            img_excel_2 = OpenpyxlImage(io.BytesIO(img_bytes_fig2))
-                            ws_graphs.add_image(img_excel_2, 'B35') 
-                
-                st.download_button(
-                    label="📥 Download Report (.xlsx)", 
-                    data=buffer_report.getvalue(), 
-                    file_name=f"{os.path.splitext(data1['filename'])[0]}_Report.xlsx", 
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True
-                )
-            
-            # ---------------------------------------------------------
-            # HTML / PDF EXPORT
-            # ---------------------------------------------------------
-            elif report_format == "PDF (.pdf)":
-                st.info("💡 หมายเหตุ: ระบบจะส่งออกเป็นไฟล์เว็บเพจ (.html) พร้อมรูปกราฟ คุณสามารถเปิดและกด `Ctrl+P` เลือก Print เป็น PDF ได้")
-                
-                # โครงสร้างหน้าเว็บพื้นฐาน
-                html_content = f"""
-                <html>
-                <head>
-                    <meta charset="utf-8">
-                    <style>
-                        body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 20px; }}
-                        table {{ border-collapse: collapse; width: 100%; margin-bottom: 20px; font-size: 14px; }}
-                        th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
-                        th {{ background-color: #f2f2f2; }}
-                        h2, h3 {{ color: #333; }}
-                        .img-container {{ text-align: center; margin-bottom: 30px; }}
-                        .img-container img {{ max-width: 100%; height: auto; border: 1px solid #ccc; }}
-                    </style>
-                </head>
-                <body>
-                    <h2>Analysis Report: {data1['filename']}</h2>
-                """
-                
-                # ฝังรูปภาพด้วย Base64 Data URI
-                if has_kaleido and img_bytes_fig1:
-                    b64_fig1 = base64.b64encode(img_bytes_fig1).decode('utf-8')
-                    html_content += f"<div class='img-container'><h3>Global Furnace Profile</h3><img src='data:image/png;base64,{b64_fig1}'></div>"
-                    
-                    if img_bytes_fig2:
-                        b64_fig2 = base64.b64encode(img_bytes_fig2).decode('utf-8')
-                        html_content += f"<div class='img-container'><h3>Individually Aligned Profile</h3><img src='data:image/png;base64,{b64_fig2}'></div>"
-                
-                # ต่อด้วยตาราง Data
-                html_content += f"""
-                    <h3>1. Zone Peak Temperatures</h3>
-                    {df_zone_summary.to_html(index=False)}
-                    <h3>2. Inspection Matrix</h3>
-                    {pd.DataFrame(matrix_rows).to_html(index=False)}
-                </body>
-                </html>
-                """
-                
-                st.download_button(
-                    label="📥 Download Report (.html สำหรับ Print เป็น PDF)", 
-                    data=html_content.encode('utf-8'), 
-                    file_name=f"{os.path.splitext(data1['filename'])[0]}_Report.html", 
-                    mime="text/html",
-                    use_container_width=True
-                )
+            st.download_button(
+                label="📥 Download Report (.xlsx)", 
+                data=buffer_report.getvalue(), 
+                file_name=f"{os.path.splitext(data1['filename'])[0]}_Report.xlsx", 
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True
+            )
                 
         # =========================================================
         # ปุ่มที่ 2: Download Raw Graph Data (Excel / CSV)
