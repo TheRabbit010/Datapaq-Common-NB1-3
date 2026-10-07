@@ -3,12 +3,14 @@ import os
 import re
 import struct
 import zlib
+import base64
 import numpy as np
 import olefile
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 from PIL import Image
+from openpyxl.drawing.image import Image as OpenpyxlImage
 
 # ==============================================================================
 # STREAMLIT PAGE CONFIGURATION & CSS STYLING
@@ -886,7 +888,7 @@ else:
     with tabs[3]:
         st.subheader("💾 Data Export & Download")
         
-        # คำนวณ Master Record ไว้เพื่อนำไปใส่ในไฟล์ Export เท่านั้น (ไม่แสดงตารางบนหน้าเว็บแล้ว)
+        # คำนวณ Master Record ไว้เพื่อนำไปใส่ในไฟล์ Export เท่านั้น
         row_data = {"File_Name": data1["filename"], "Furnace_Type": f_variant, "Operator_Name": data1["operator_name"], "Company": data1["company"], "Site": data1["site"], "Entrance_Time": data1["detected_start_hhmmss"], "Line_Speed_MPM": data1["line_speed_mpm"]}
         for pb in [f"PB{i}" for i in range(1, 9)]:
             ch = f"PB#{pb.replace('PB','')}"
@@ -908,19 +910,56 @@ else:
         col1, col2 = st.columns(2)
         
         # =========================================================
-        # ปุ่มที่ 1: Download Analysis Report (Excel / PDF)
+        # ปุ่มที่ 1: Download Analysis Report (Excel / PDF) พร้อมรูปกราฟ
         # =========================================================
         with col1:
             st.markdown("#### 📊 1. Download Analysis Report")
-            st.caption("ดาวน์โหลดสรุปผล (Zone Peaks & Inspection Matrix)")
+            st.caption("ดาวน์โหลดสรุปผล (กราฟ Profile, Zone Peaks & Inspection Matrix)")
             report_format = st.radio("เลือกชนิดไฟล์ Report:", ["Excel (.xlsx)", "PDF (.pdf)"], horizontal=True, key="radio_report")
             
+            # ---------------------------------------------------------
+            # ส่วนการ Render กราฟ Plotly เป็นรูปภาพ (PNG Bytes)
+            # ---------------------------------------------------------
+            img_bytes_fig1 = None
+            img_bytes_fig2 = None
+            has_kaleido = True
+            
+            try:
+                with st.spinner("⏳ กำลังเตรียมรูปกราฟสำหรับดาวน์โหลด..."):
+                    # แปลงรูปที่ 1 (Global Profile)
+                    img_bytes_fig1 = fig1.to_image(format="png", width=1200, height=600, scale=1.5)
+                    
+                    # แปลงรูปที่ 2 (Indiv Profile) หากผู้ใช้เปิด Toggle ไว้
+                    if show_indiv_chart and 'fig2' in locals():
+                        img_bytes_fig2 = fig2.to_image(format="png", width=1200, height=600, scale=1.5)
+            except Exception as e:
+                has_kaleido = False
+                st.warning("⚠️ ระบบไม่สามารถแนบรูปกราฟลงในรีพอร์ตได้ เนื่องจากขาดไลบรารี `kaleido` (กรุณาติดตั้งโดยใช้คำสั่ง `pip install kaleido`)")
+
+            # ---------------------------------------------------------
+            # EXCEL EXPORT
+            # ---------------------------------------------------------
             if report_format == "Excel (.xlsx)":
                 buffer_report = io.BytesIO()
                 with pd.ExcelWriter(buffer_report, engine='openpyxl') as writer:
+                    # เขียนข้อมูลลงชีทแบบเดิม
                     df_single_row.to_excel(writer, sheet_name="Master_Record", index=False)
                     df_zone_summary.to_excel(writer, sheet_name="Zone_Peaks", index=False)
                     pd.DataFrame(matrix_rows).to_excel(writer, sheet_name="Inspection_Matrix", index=False)
+                    
+                    # หาก Render กราฟสำเร็จ ให้สร้างชีทใหม่และแปะรูป
+                    if has_kaleido and img_bytes_fig1:
+                        wb = writer.book
+                        ws_graphs = wb.create_sheet("Profile_Graphs") # สร้างชีทเก็บกราฟโดยเฉพาะ
+                        
+                        # แทรกรูปที่ 1
+                        img_excel_1 = OpenpyxlImage(io.BytesIO(img_bytes_fig1))
+                        ws_graphs.add_image(img_excel_1, 'B2')
+                        
+                        # แทรกรูปที่ 2 (ถ้ามี) ต่อจากรูปแรก
+                        if img_bytes_fig2:
+                            img_excel_2 = OpenpyxlImage(io.BytesIO(img_bytes_fig2))
+                            ws_graphs.add_image(img_excel_2, 'B35') 
                 
                 st.download_button(
                     label="📥 Download Report (.xlsx)", 
@@ -930,17 +969,50 @@ else:
                     use_container_width=True
                 )
             
+            # ---------------------------------------------------------
+            # HTML / PDF EXPORT
+            # ---------------------------------------------------------
             elif report_format == "PDF (.pdf)":
-                st.info("💡 หมายเหตุ: การสร้างไฟล์ PDF โดยตรงจำเป็นต้องติดตั้ง Library เสริม (เช่น pdfkit) ชั่วคราวระบบจะส่งออกเป็น HTML ซึ่งคุณสามารถใช้ Browser สั่ง Print เป็น PDF ได้")
+                st.info("💡 หมายเหตุ: ระบบจะส่งออกเป็นไฟล์เว็บเพจ (.html) พร้อมรูปกราฟ คุณสามารถเปิดและกด `Ctrl+P` เลือก Print เป็น PDF ได้")
                 
+                # โครงสร้างหน้าเว็บพื้นฐาน
                 html_content = f"""
-                <h2>Analysis Report: {data1['filename']}</h2>
-                <h3>1. Zone Peak Temperatures</h3>
-                {df_zone_summary.to_html(index=False)}
-                <br>
-                <h3>2. Inspection Matrix</h3>
-                {pd.DataFrame(matrix_rows).to_html(index=False)}
+                <html>
+                <head>
+                    <meta charset="utf-8">
+                    <style>
+                        body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 20px; }}
+                        table {{ border-collapse: collapse; width: 100%; margin-bottom: 20px; font-size: 14px; }}
+                        th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
+                        th {{ background-color: #f2f2f2; }}
+                        h2, h3 {{ color: #333; }}
+                        .img-container {{ text-align: center; margin-bottom: 30px; }}
+                        .img-container img {{ max-width: 100%; height: auto; border: 1px solid #ccc; }}
+                    </style>
+                </head>
+                <body>
+                    <h2>Analysis Report: {data1['filename']}</h2>
                 """
+                
+                # ฝังรูปภาพด้วย Base64 Data URI
+                if has_kaleido and img_bytes_fig1:
+                    b64_fig1 = base64.b64encode(img_bytes_fig1).decode('utf-8')
+                    html_content += f"<div class='img-container'><h3>Global Furnace Profile</h3><img src='data:image/png;base64,{b64_fig1}'></div>"
+                    
+                    if img_bytes_fig2:
+                        b64_fig2 = base64.b64encode(img_bytes_fig2).decode('utf-8')
+                        html_content += f"<div class='img-container'><h3>Individually Aligned Profile</h3><img src='data:image/png;base64,{b64_fig2}'></div>"
+                
+                # ต่อด้วยตาราง Data
+                html_content += f"""
+                    <h3>1. Zone Peak Temperatures</h3>
+                    {df_zone_summary.to_html(index=False)}
+                    <h3>2. Inspection Matrix</h3>
+                    {pd.DataFrame(matrix_rows).to_html(index=False)}
+                </body>
+                </html>
+                """
+                
                 st.download_button(
                     label="📥 Download Report (.html สำหรับ Print เป็น PDF)", 
                     data=html_content.encode('utf-8'), 
@@ -957,7 +1029,7 @@ else:
             st.caption("ดาวน์โหลดข้อมูลอุณหภูมิดิบที่ใช้แสดงผลกราฟ")
             raw_format = st.radio("เลือกชนิดไฟล์ Raw Data:", ["CSV (.csv)", "Excel (.xlsx)"], horizontal=True, key="radio_raw")
             
-            # ลบคอลัมน์คำนวณระยะทางแบบแยก (ที่ใช้ทำ Indiv chart) ออก เพื่อให้ข้อมูลดิบดูสะอาดขึ้น
+            # ลบคอลัมน์คำนวณระยะทางแบบแยกออกเพื่อให้ข้อมูลดิบดูสะอาดขึ้น
             df_raw_export = df_m1.drop(columns=[c for c in df_m1.columns if "Distance_PB#" in c], errors='ignore')
             
             if raw_format == "Excel (.xlsx)":
