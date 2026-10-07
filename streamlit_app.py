@@ -147,16 +147,20 @@ def extract_probe_series_autonomously(decomp_bytes):
         except: continue
         clean_vals, glitch_count = [], 0
         for v in vals:
-            if isinstance(v, float) and -10.0 <= v <= 650.0:
+            # ขยายช่วงการอ่านอุณหภูมิ เผื่อสายหลวมมี Noise สวิง
+            if isinstance(v, float) and -50.0 <= v <= 1000.0:
                 clean_vals.append(v)
                 glitch_count = 0
             else:
                 glitch_count += 1
                 if len(clean_vals) > 500:
-                    if glitch_count <= 5: clean_vals.append(clean_vals[-1] if clean_vals else 0.0)
+                    # ยอมรับ Noise ต่อเนื่องได้มากขึ้นก่อนจะตัดกราฟทิ้ง (เพิ่มจาก 5 เป็น 30)
+                    if glitch_count <= 30: 
+                        clean_vals.append(clean_vals[-1] if clean_vals else 0.0)
                     else: break
                 elif glitch_count > 3: clean_vals = []
-        if len(clean_vals) > len(best_series) and max(clean_vals) > 150.0:
+        # ลดเงื่อนไขอุณหภูมิ Peak สำหรับการดึงข้อมูล (เผื่อสายหลวมอ่านได้ต่ำ)
+        if len(clean_vals) > len(best_series) and max(clean_vals) > 100.0:
             best_series = clean_vals
     return best_series
 
@@ -226,7 +230,6 @@ def parse_operator_and_metadata(comments_list):
     clean_notes = re.sub(r'(?i)https?://[^\s]*', '', clean_notes)
     clean_notes = re.sub(r'(?i)\\\\[a-z0-9_]+\\[^\s]*', '', clean_notes)
     
-    # อนุญาตให้เครื่องหมาย % และ * คงอยู่ได้
     clean_notes = re.sub(r'[^\w\s\.\,\-\/\(\)\=\+:\%\*]', ' ', clean_notes)
     clean_notes = re.sub(r'\b[A-Z0-9]{15,}\b', '', clean_notes) 
     
@@ -234,7 +237,6 @@ def parse_operator_and_metadata(comments_list):
         if token != "N/A":
             clean_notes = re.sub(rf'\b{re.escape(token)}\b', '', clean_notes, flags=re.IGNORECASE)
             
-    # ดึงรายชื่อ Probe Locations ออกมาก่อนที่จะตัดข้อความ
     extra_probes = []
     probe_matches = re.finditer(r'(?:Probe\s*no\.?\s*[1-8]|PB#[1-8]|#[1-8]\s*\().*?(?=\Z|\bProbe\s*no|\bPB#|#[1-8]\s*\()', clean_notes, flags=re.IGNORECASE)
     for m in probe_matches:
@@ -242,12 +244,10 @@ def parse_operator_and_metadata(comments_list):
         if re.search(r'(core|bottom|top|left|right|manifold|pipe|drill)', p_text, re.IGNORECASE):
             extra_probes.append(p_text)
             
-    # ตัดข้อความ Physical probe mapping ออกจาก Notes เพื่อให้ดูสะอาด
     loc_cutoff = re.search(r'\b(Bottom\s*-\s*(Top|Bottom|Center|Left|Right)|Top\s*-\s*(Top|Bottom|Center|Left|Right)|Middle\s*left|Middle\s*right|Right\s*core|Left\s*core|NB\s*\d\s*with\s*Debinder|Dryer\s*Z\s*1)\b', clean_notes, re.IGNORECASE)
     if loc_cutoff:
         clean_notes = clean_notes[:loc_cutoff.start()]
         
-    # ตัดขยะภาษาต่างดาวตัวอื่นๆ ที่เหลือรอด
     clean_notes = re.sub(r'\b(hzgxdvN|ljjSQP|xwTLL|nif\s*jgni)\b', '', clean_notes, flags=re.IGNORECASE)
     
     clean_notes = re.sub(r'\s:\s(?=[A-Za-z])', ' ', clean_notes)
@@ -354,26 +354,19 @@ def process_paq_file(file_bytes, filename):
             invalid_cols.append(col)
             continue
             
-        # 1. Length Check: โพรบต้องมีข้อมูลอย่างน้อย 85% 
-        if len(series) < len(df_master) * 0.85:
+        # 1. Length Check: ลดความเข้มงวดลงเหลือ 20% เพื่อเก็บข้อมูลช่วงโพรบหลวม
+        if len(series) < len(df_master) * 0.20:
             invalid_cols.append(col)
             df_master[col] = np.nan
             continue
             
-        # 2. Peak Check: โพรบต้องมีอุณหภูมิถึง 400°C 
-        if series.max() < 400.0:
+        # 2. Peak Check: ลดเกณฑ์เหลือ 100°C 
+        if series.max() < 100.0:
             invalid_cols.append(col)
             df_master[col] = np.nan
             continue
             
-        # 3. Erratic Jump Check: หากมีข้อมูลกระโดดผิดปกติ (เกิน 200°C ในพอยต์เดียว)
-        if (series.diff().abs() > 200.0).any():
-            invalid_cols.append(col)
-            df_master[col] = np.nan
-            continue
-            
-    # ตรวจสอบว่ามีโพรบเหลือรอดอย่างน้อย 1 เส้นหรือไม่
-    if not [c for c in probe_cols if c not in invalid_cols]: return None 
+        # 3. Erratic Jump Check: ปิดการทำงานส่วนนี้ เพื่อให้แสดงเส้นกราฟได้แม้ค่าจะกระโดดไปมา
     # =================================================================================
     
     SUSTAINED_SECONDS = 15
@@ -400,13 +393,11 @@ def process_paq_file(file_bytes, filename):
     for s in raw_texts:
         is_recipe = re.search(r'\b(During\s*datapaq|O2\s*Exit|ppm|CV\s*speed|mm/min|N2\s*Flow|WJ\s*Flow|Top\s*Temp|Bot\s*temp|Temp\s*Top|Temp\s*Bot|SP1|SP2\s*==>|Braze[d]?\s*Temp|BrazeTemp|Brazed|Brazing|Hz)\b|(Top\s*:|Bot\s*:)', s, re.IGNORECASE)
         
-        # Intercept and force to notes if it is a flux/loading instruction disguised as a recipe
         if is_recipe and re.search(r'(apply\s*flux|paste\s*flux|nocolok|loading\s*double|gap\s*\d+mm)', s, re.IGNORECASE) and not re.search(r'(during\s*datapaq|WJ\s*Flow)', s, re.IGNORECASE):
             is_recipe = False
             
         if is_recipe:
             s_rec = s
-            # FIND "during datapaq" TO AVOID GIBBERISH AT THE START
             match_during = re.search(r'(?i)(?:data\s*)?during\s*datapaq', s_rec)
             if match_during:
                 s_rec = "Data during datapaq" + s_rec[match_during.end():]
@@ -414,12 +405,11 @@ def process_paq_file(file_bytes, filename):
                 s_rec = re.split(r'\b[A-Za-z]:\\', s_rec)[0]
                 s_rec = re.sub(r'\S{30,}', '', s_rec) 
             
-            # Truncate after Bot temps to remove trailing gibberish
             end_match = re.search(r'(Bot\s*:.*?\'?C\.?)', s_rec, re.IGNORECASE)
             if end_match:
                 s_rec = s_rec[:end_match.end()]
                 
-            s_rec = re.sub(r'[\{\}\[\]\^\`\|\\]+', '', s_rec) # Remove common binary-to-ascii garbage chars
+            s_rec = re.sub(r'[\{\}\[\]\^\`\|\\]+', '', s_rec) 
             s_rec = re.split(r'\bdouble m\b', s_rec, flags=re.IGNORECASE)[0]
             s_rec = re.sub(r'\b(?:CProcessFile|COven|CZone|CRecipe|CProduct|CAnalysisParameters|CToleranceCurve|CAlarmParametersDouble|CMaximumMinimumAnalysisParameters|CTimeAtMeasurementAnalysisParameters|CRiseFallAnalysisParameters|CSlopeAnalysisParameters|CPeakDifferenceAnalysisParameters|CAreaUnderCurveAnalysisParameters|CFurnaceSurveyAnalysisParameters)\b', '', s_rec).strip()
             s_rec = re.sub(r'^[>#;\.,\|]+', '', s_rec).strip()
@@ -441,7 +431,6 @@ def process_paq_file(file_bytes, filename):
             s_rec = re.sub(r'(Top\s*:)', r'\n\1', s_rec, flags=re.IGNORECASE)
             s_rec = re.sub(r'(Bot\s*:)', r'\n\1', s_rec, flags=re.IGNORECASE)
             
-            # clean up multiple spaces and newlines
             s_rec = re.sub(r' +', ' ', s_rec)
             s_rec = re.sub(r'\n\s*\n', '\n\n', s_rec).strip()
             
