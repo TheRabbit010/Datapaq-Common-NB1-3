@@ -6,3 +6,5 @@ olefile
 Pillow
 openpyxl
 matplotlib
+kaleido
+openpyxl
