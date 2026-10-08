@@ -586,6 +586,9 @@ def process_paq_file(file_bytes, filename):
 # ==============================================================================
 # STREAMLIT UI LAYOUT & MAIN APPLICATION
 # ==============================================================================
+# 🛠️ 1. จัดการ State สำหรับ Dynamic Uploader Keys
+if "paq1_uploader_key" not in st.session_state:
+    st.session_state.paq1_uploader_key = 0
 if "paq2_uploader_key" not in st.session_state:
     st.session_state.paq2_uploader_key = 0
 
@@ -594,10 +597,15 @@ st.markdown("Automated thermal profile extraction, zone metrics, and multi-file 
 
 with st.sidebar:
     st.header("📁 File Upload")
+    
+    # 🛠️ 2. ปุ่ม Reset / Clear Data ที่เพิ่มการนับ Key เพื่อล้างช่องอัปโหลดไฟล์
     if st.button("🔄 Reset / Clear Data"):
         st.cache_data.clear()
+        st.session_state.paq1_uploader_key += 1
+        st.session_state.paq2_uploader_key += 1
         st.rerun()
-    uploaded_file1 = st.file_uploader("Upload Main .PAQ File", type=["paq"], key="paq1")
+        
+    uploaded_file1 = st.file_uploader("Upload Main .PAQ File", type=["paq"], key=f"paq1_{st.session_state.paq1_uploader_key}")
 
 if not uploaded_file1:
     st.info("👈 Please upload a `.paq` binary file using the sidebar to begin analysis.")
